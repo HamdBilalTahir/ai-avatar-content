@@ -1,36 +1,112 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# AI Avatar Content
+
+Generate short AI-presented videos end-to-end from a text topic. Describe an avatar, approve the generated face, provide a topic, and the system produces a lip-synced video — automatically.
+
+---
+
+## How It Works
+
+1. **Describe your avatar** — Write a prompt describing the presenter (age, style, expression). Gemini generates a photorealistic face.
+2. **Approve your avatar** — Regenerate as many times as you like until you're happy.
+3. **Enter your topic** — One sentence describing what the video is about.
+4. **Generate** — The pipeline runs automatically:
+   - Gemini writes the script
+   - Cartesia synthesises the voiceover
+   - Sync.so lip-syncs the avatar to the audio
+5. **Watch your video** — The finished video appears on the status page when ready.
+
+---
+
+## Tech Stack
+
+| Layer          | Technology                                       |
+| -------------- | ------------------------------------------------ |
+| Framework      | Next.js 16 (App Router) + React 19               |
+| Language       | TypeScript (strict)                              |
+| Styling        | Tailwind CSS v4                                  |
+| Job State      | Upstash Redis                                    |
+| Avatar Image   | Google Gemini (`gemini-3.1-flash-image-preview`) |
+| Script         | Google Gemini via LangChain                      |
+| Text-to-Speech | Cartesia                                         |
+| Lip Sync       | Sync.so                                          |
+
+---
 
 ## Getting Started
 
-First, run the development server:
+### 1. Install dependencies
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+yarn install
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+### 2. Configure environment
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+cp .env_example .env
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Open `.env` and fill in your credentials:
 
-## Learn More
+```bash
+UPSTASH_REDIS_REST_URL=       # From Upstash console
+UPSTASH_REDIS_REST_TOKEN=     # From Upstash console
+GEMINI_API_KEY= # From Google AI Studio
+CARTESIA_API_KEY=             # From Cartesia dashboard
+SYNCSO_API_KEY=               # From Sync.so dashboard
+NEXT_PUBLIC_APP_URL=http://localhost:3000
+STORAGE_PATH=./storage
+```
 
-To learn more about Next.js, take a look at the following resources:
+### 3. Run the dev server
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```bash
+yarn dev
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Open [http://localhost:3000](http://localhost:3000) — you'll land on the avatar creation page.
 
-## Deploy on Vercel
+---
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Project Structure
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+```
+src/
+├── app/
+│   ├── page.tsx                    # Home → redirects to /avatar/new
+│   ├── avatar/new/page.tsx         # Avatar creation + pipeline start
+│   ├── pipeline/[id]/page.tsx      # Status polling + video output
+│   └── api/
+│       ├── avatar/generate/        # POST — Gemini avatar image
+│       ├── pipeline/create/        # POST — Start pipeline job
+│       ├── pipeline/[id]/          # GET  — Job status
+│       ├── storage/[id]/video/     # GET  — Serve video file
+│       └── webhooks/syncso/        # POST — Sync.so callback
+├── lib/
+│   ├── types.ts                    # Shared TypeScript interfaces
+│   ├── redis.ts                    # Upstash Redis singleton
+│   └── jobs.ts                     # Job CRUD utilities
+└── services/
+    ├── gemini-image.ts             # Avatar generation
+    ├── gemini-script.ts            # Script generation
+    ├── cartesia.ts                 # TTS
+    └── syncso.ts                   # Lip sync submission
+```
+
+---
+
+## Scripts
+
+```bash
+yarn dev        # Development server
+yarn build      # Production build
+yarn typecheck  # TypeScript check
+yarn test       # Jest test suite
+yarn lint       # ESLint
+```
+
+---
+
+## Architecture
+
+See [Architecture.md](Architecture.md) for a full deep-dive: data flow diagrams, Redis key patterns, API contracts, pipeline state machine, and component breakdown.

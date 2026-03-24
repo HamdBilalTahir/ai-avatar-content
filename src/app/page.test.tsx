@@ -1,9 +1,14 @@
-import { render } from '@testing-library/react';
+import { redirect } from 'next/navigation';
+
+jest.mock('next/navigation', () => ({
+  redirect: jest.fn(),
+}));
+
 import Home from './page';
 
 describe('Home', () => {
-  it('renders without crashing', () => {
-    const { container } = render(<Home />);
-    expect(container).toBeInTheDocument();
+  it('redirects to /avatar/new', () => {
+    Home();
+    expect(redirect).toHaveBeenCalledWith('/avatar/new');
   });
 });
