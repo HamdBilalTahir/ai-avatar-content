@@ -12,7 +12,8 @@ export interface EditorState {
   projects: Project[];
   activeProjectId: string | null;
   mediaItems: MediaItem[]; // in-memory only
-  playhead: number;
+  playhead: number; // white head — play position, advances during playback
+  editCursor: number; // violet head — follows hover, used for edit ops
   isPlaying: boolean;
   zoom: number; // px per second
   selectedClipId: string | null;
@@ -26,6 +27,7 @@ const INITIAL_STATE: EditorState = {
   activeProjectId: null,
   mediaItems: [],
   playhead: 0,
+  editCursor: 0,
   isPlaying: false,
   zoom: 60,
   selectedClipId: null,
@@ -59,13 +61,21 @@ export type EditorAction =
   | { type: 'SPLIT_CLIP'; clipId: string; atTime: number; newClipId: string }
   | { type: 'SET_CLIP_SPEED'; clipId: string; speed: number }
   | { type: 'SET_CLIP_VOLUME'; clipId: string; volume: number }
+  | { type: 'SET_CLIP_PITCH'; clipId: string; pitch: number }
+  | { type: 'SET_CLIP_TONE'; clipId: string; tone: number }
   | { type: 'DELETE_CLIP'; clipId: string }
   | { type: 'SET_PLAYHEAD'; time: number }
   | { type: 'ADVANCE_PLAYHEAD'; dt: number }
+  | { type: 'SET_EDIT_CURSOR'; time: number }
   | { type: 'SET_PLAYING'; playing: boolean }
   | { type: 'SET_ZOOM'; zoom: number }
   | { type: 'SELECT_CLIP'; clipId: string | null }
-  | { type: 'SET_MEDIA_TAB'; tab: 'videos' | 'audio' };
+  | { type: 'SET_MEDIA_TAB'; tab: 'videos' | 'audio' }
+  | { type: 'SNAPSHOT_FOR_UNDO' }
+  | { type: 'SET_CLIP_VOLUME_PREVIEW'; clipId: string; volume: number }
+  | { type: 'SET_CLIP_SPEED_PREVIEW'; clipId: string; speed: number }
+  | { type: 'SET_CLIP_PITCH_PREVIEW'; clipId: string; pitch: number }
+  | { type: 'SET_CLIP_TONE_PREVIEW'; clipId: string; tone: number };
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -103,6 +113,20 @@ function patchClips(
     clips: fn(project.clips),
     updatedAt: Date.now(),
   });
+}
+
+/** Update clips without pushing to undo history (used during live drag previews) */
+function patchClipsNoHistory(
+  state: EditorState,
+  fn: (clips: Clip[]) => Clip[]
+): EditorState {
+  const project = getProject(state);
+  if (!project) return state;
+  return updateProject(
+    state,
+    { ...project, clips: fn(project.clips), updatedAt: Date.now() },
+    true // isUndoRedo = true → skip history push
+  );
 }
 
 // ─── Reducer ─────────────────────────────────────────────────────────────────
@@ -274,9 +298,14 @@ function reducer(state: EditorState, action: EditorAction): EditorState {
     case 'ADD_CLIP': {
       const project = getProject(state);
       if (!project) return state;
+      const clip: Clip = {
+        ...action.clip,
+        pitch: action.clip.pitch ?? 0,
+        tone: action.clip.tone ?? 0,
+      }; // defaults for clips loaded from old localStorage
       return updateProject(state, {
         ...project,
-        clips: [...project.clips, action.clip],
+        clips: [...project.clips, clip],
         updatedAt: Date.now(),
       });
     }
@@ -355,6 +384,20 @@ function reducer(state: EditorState, action: EditorAction): EditorState {
         )
       );
 
+    case 'SET_CLIP_PITCH':
+      return patchClips(state, (clips) =>
+        clips.map((c) =>
+          c.id === action.clipId ? { ...c, pitch: action.pitch } : c
+        )
+      );
+
+    case 'SET_CLIP_TONE':
+      return patchClips(state, (clips) =>
+        clips.map((c) =>
+          c.id === action.clipId ? { ...c, tone: action.tone } : c
+        )
+      );
+
     case 'DELETE_CLIP':
       return patchClips(state, (clips) =>
         clips.filter((c) => c.id !== action.clipId)
@@ -366,17 +409,51 @@ function reducer(state: EditorState, action: EditorAction): EditorState {
     case 'ADVANCE_PLAYHEAD':
       return { ...state, playhead: Math.max(0, state.playhead + action.dt) };
 
+    case 'SET_EDIT_CURSOR':
+      return { ...state, editCursor: Math.max(0, action.time) };
+
     case 'SET_PLAYING':
       return { ...state, isPlaying: action.playing };
 
     case 'SET_ZOOM':
-      return { ...state, zoom: Math.min(200, Math.max(20, action.zoom)) };
+      return { ...state, zoom: Math.min(480, Math.max(30, action.zoom)) };
 
     case 'SELECT_CLIP':
       return { ...state, selectedClipId: action.clipId };
 
     case 'SET_MEDIA_TAB':
       return { ...state, activeMediaTab: action.tab };
+
+    case 'SNAPSHOT_FOR_UNDO':
+      return { ...state, past: [...state.past, state.projects], future: [] };
+
+    case 'SET_CLIP_VOLUME_PREVIEW':
+      return patchClipsNoHistory(state, (clips) =>
+        clips.map((c) =>
+          c.id === action.clipId ? { ...c, volume: action.volume } : c
+        )
+      );
+
+    case 'SET_CLIP_SPEED_PREVIEW':
+      return patchClipsNoHistory(state, (clips) =>
+        clips.map((c) =>
+          c.id === action.clipId ? { ...c, speed: action.speed } : c
+        )
+      );
+
+    case 'SET_CLIP_PITCH_PREVIEW':
+      return patchClipsNoHistory(state, (clips) =>
+        clips.map((c) =>
+          c.id === action.clipId ? { ...c, pitch: action.pitch } : c
+        )
+      );
+
+    case 'SET_CLIP_TONE_PREVIEW':
+      return patchClipsNoHistory(state, (clips) =>
+        clips.map((c) =>
+          c.id === action.clipId ? { ...c, tone: action.tone } : c
+        )
+      );
 
     default:
       return state;

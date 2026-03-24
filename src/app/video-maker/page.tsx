@@ -87,7 +87,7 @@ function ExportButton() {
       <button
         onClick={handleExport}
         disabled={!activeProject || exporting}
-        className="flex items-center gap-1.5 rounded-lg bg-emerald-600 px-4 py-2 text-xs font-bold text-white shadow-sm transition hover:bg-emerald-700 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
+        className="flex items-center gap-2 rounded-lg bg-emerald-600 px-5 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-emerald-700 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
       >
         {exporting ? (
           <>
@@ -161,18 +161,18 @@ function VideoMakerInner() {
   return (
     <div className="flex h-full flex-col bg-slate-50 text-slate-900 overflow-hidden">
       {/* Top bar */}
-      <header className="flex items-center justify-between border-b border-slate-200 bg-white px-4 py-3 flex-shrink-0">
+      <header className="flex items-center justify-between border-b border-slate-200 bg-white px-6 py-4 flex-shrink-0">
         <div className="flex items-center gap-2.5">
-          <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-violet-600">
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-violet-600">
             <svg
-              className="h-4 w-4 text-white"
+              className="h-5 w-5 text-white"
               viewBox="0 0 24 24"
               fill="currentColor"
             >
               <path d="M15 10l4.553-2.277A1 1 0 0 1 21 8.693v6.614a1 1 0 0 1-1.447.916L15 14v-4zM3 8a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8z" />
             </svg>
           </div>
-          <span className="font-semibold text-slate-800 text-sm tracking-tight">
+          <span className="font-semibold text-slate-800 text-base tracking-tight">
             Video Maker
           </span>
           {activeProject && (
@@ -190,7 +190,7 @@ function VideoMakerInner() {
       {/* Body */}
       <div className="flex flex-1 overflow-hidden">
         {/* Left sidebar */}
-        <div className="flex w-72 flex-shrink-0 flex-col border-r border-slate-200 bg-white">
+        <div className="flex w-80 flex-shrink-0 flex-col border-r border-slate-200 bg-white">
           {/* Sidebar tabs */}
           <div className="flex border-b border-slate-200">
             {(
@@ -202,7 +202,7 @@ function VideoMakerInner() {
               <button
                 key={t.key}
                 onClick={() => setSidebarTab(t.key)}
-                className={`flex-1 py-2.5 text-xs font-semibold transition ${
+                className={`flex-1 py-3 text-sm font-semibold transition ${
                   sidebarTab === t.key
                     ? 'border-b-2 border-violet-600 text-violet-700'
                     : 'text-slate-500 hover:text-slate-700'

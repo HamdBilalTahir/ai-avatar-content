@@ -109,8 +109,7 @@ export default function MediaPanel() {
 
       const thumbnail =
         type === 'video' ? await extractThumbnail(localUrl) : null;
-      const waveform =
-        type === 'audio' ? await extractWaveform(localUrl) : null;
+      const waveform = await extractWaveform(localUrl);
 
       const item: MediaItem = {
         id,
@@ -170,7 +169,7 @@ export default function MediaPanel() {
           onClick={() =>
             (tab === 'videos' ? videoInputRef : audioInputRef).current?.click()
           }
-          className="flex w-full items-center justify-center gap-1.5 rounded-lg border-2 border-dashed border-violet-300 bg-violet-50 px-3 py-2.5 text-xs font-semibold text-violet-700 transition hover:border-violet-400 hover:bg-violet-100"
+          className="flex w-full items-center justify-center gap-2 rounded-lg border-2 border-dashed border-violet-300 bg-violet-50 px-3 py-3 text-sm font-semibold text-violet-700 transition hover:border-violet-400 hover:bg-violet-100"
         >
           <svg
             className="h-3.5 w-3.5"
@@ -196,7 +195,7 @@ export default function MediaPanel() {
           <button
             key={t}
             onClick={() => dispatch({ type: 'SET_MEDIA_TAB', tab: t })}
-            className={`flex-1 py-2 text-xs font-medium transition capitalize ${
+            className={`flex-1 py-3 text-sm font-medium transition capitalize ${
               tab === t
                 ? 'border-b-2 border-violet-600 text-violet-700'
                 : 'text-slate-500 hover:text-slate-700'
@@ -261,7 +260,7 @@ function MediaThumbnail({ item }: { item: MediaItem }) {
       className="group relative rounded-lg overflow-hidden border border-slate-200 bg-slate-100 cursor-grab active:cursor-grabbing select-none"
     >
       {item.type === 'video' ? (
-        <div className="relative h-28 bg-slate-900 flex items-center justify-center overflow-hidden">
+        <div className="relative h-36 bg-slate-900 flex items-center justify-center overflow-hidden">
           {item.thumbnail ? (
             <img
               src={item.thumbnail}
@@ -284,7 +283,7 @@ function MediaThumbnail({ item }: { item: MediaItem }) {
           </span>
         </div>
       ) : (
-        <div className="relative h-14 bg-violet-900 flex items-center justify-center px-2 overflow-hidden">
+        <div className="relative h-20 bg-violet-900 flex items-center justify-center px-2 overflow-hidden">
           {/* Mini waveform */}
           {item.waveform && (
             <svg
@@ -322,10 +321,10 @@ function MediaThumbnail({ item }: { item: MediaItem }) {
 
       {/* Name + meta */}
       <div className="px-2 py-1.5">
-        <p className="truncate text-[11px] font-medium text-slate-700">
+        <p className="truncate text-xs font-medium text-slate-700">
           {item.name}
         </p>
-        <p className="text-[10px] text-slate-400">{formatSize(item.size)}</p>
+        <p className="text-[11px] text-slate-400">{formatSize(item.size)}</p>
       </div>
 
       {/* Delete button */}

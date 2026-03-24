@@ -13,8 +13,41 @@ interface ExportClip {
   trimEnd: number;
   speed: number;
   volume: number;
+  pitch: number; // semitones, -12 to +12
+  tone: number; // -1 (warm) to +1 (bright)
   serverPath: string | null;
   mediaDuration: number;
+}
+
+/**
+ * Build the FFmpeg audio filter chain for a clip's pitch + tone adjustments.
+ * Pitch uses asetrate+atempo (pitch shift without tempo change).
+ * Tone uses two peaking EQ bands (200 Hz warm vs 3 kHz bright).
+ */
+function audioProcessingFilters(clip: ExportClip): string {
+  const filters: string[] = [];
+
+  // Pitch: change sample rate to shift pitch, then time-stretch back to original tempo
+  const p = clip.pitch ?? 0;
+  if (p !== 0) {
+    const factor = Math.pow(2, p / 12);
+    const newRate = Math.round(44100 * factor);
+    const atempoBack = (1 / factor).toFixed(6);
+    filters.push(`asetrate=${newRate}`, `atempo=${atempoBack}`);
+  }
+
+  // Tone: simple 2-band peaking EQ (warm = bass up + treble down, bright = opposite)
+  const t = clip.tone ?? 0;
+  if (Math.abs(t) > 0.01) {
+    const bassGain = (-t * 5).toFixed(2);
+    const trebleGain = (t * 5).toFixed(2);
+    filters.push(
+      `equalizer=f=200:width_type=o:width=2:g=${bassGain}`,
+      `equalizer=f=3000:width_type=o:width=2:g=${trebleGain}`
+    );
+  }
+
+  return filters.length > 0 ? ',' + filters.join(',') : '';
 }
 
 interface ExportTrack {
@@ -122,7 +155,7 @@ export async function POST(req: NextRequest) {
           '-i',
           src,
           '-filter_complex',
-          `[0:v]setpts=${1 / clip.speed}*PTS[v];[0:a]atempo=${clip.speed}[a]`,
+          `[0:v]setpts=${1 / clip.speed}*PTS[v];[0:a]volume=${clip.volume},atempo=${clip.speed}${audioProcessingFilters(clip)}[a]`,
           '-map',
           '[v]',
           '-map',
@@ -194,7 +227,7 @@ export async function POST(req: NextRequest) {
           if (!existsSync(src)) continue;
           audioInputs.push('-ss', String(clip.trimStart), '-i', src);
           filterParts.push(
-            `[${audioIdx}:a]volume=${clip.volume},adelay=${Math.round(clip.timelineStart * 1000)}|${Math.round(clip.timelineStart * 1000)}[a${audioIdx}]`
+            `[${audioIdx}:a]volume=${clip.volume},atempo=${clip.speed}${audioProcessingFilters(clip)},adelay=${Math.round(clip.timelineStart * 1000)}|${Math.round(clip.timelineStart * 1000)}[a${audioIdx}]`
           );
           audioIdx++;
         }
@@ -240,7 +273,7 @@ export async function POST(req: NextRequest) {
         if (!existsSync(src)) continue;
         audioInputs.push('-ss', String(clip.trimStart), '-i', src);
         filterParts.push(
-          `[${idx}:a]volume=${clip.volume},adelay=${Math.round(clip.timelineStart * 1000)}|${Math.round(clip.timelineStart * 1000)}[a${idx}]`
+          `[${idx}:a]volume=${clip.volume},atempo=${clip.speed}${audioProcessingFilters(clip)},adelay=${Math.round(clip.timelineStart * 1000)}|${Math.round(clip.timelineStart * 1000)}[a${idx}]`
         );
         idx++;
       }

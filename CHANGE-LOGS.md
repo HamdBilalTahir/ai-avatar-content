@@ -1,8 +1,158 @@
+## 🗓️ **2026-03-25**
+
+---
+
+### ✨ Features
+
+---
+
+> ### Knob Popup Panel — Portal-Based, Pointer-Capture Drag, Undo/Redo
+>
+> - **What changed:**
+>   - Knobs (Tempo, Pitch, Tone) now open as a **floating popup panel** anchored above the clip, rendered via `createPortal` into `document.body`. This means they are never clipped by `overflow-hidden` containers — they always float freely over the UI.
+>   - Each knob uses **pointer capture** (`setPointerCapture` / `releasePointerCapture`) on pointer-down, so dragging works reliably even when the mouse leaves the knob or the clip area entirely.
+>   - The popup also includes a **Volume bar** (drag up/down) so all four clip audio parameters are accessible in one place.
+>   - **Undo/redo support**: A `SNAPSHOT_FOR_UNDO` action is dispatched once at the start of each drag gesture, pushing the pre-drag state to history. All live-drag updates use new `*_PREVIEW` action variants (`SET_CLIP_VOLUME_PREVIEW`, `SET_CLIP_SPEED_PREVIEW`, `SET_CLIP_PITCH_PREVIEW`, `SET_CLIP_TONE_PREVIEW`) that update state without pushing to the undo stack. Result: `Cmd+Z` / `Cmd+Shift+Z` undoes or redoes the entire gesture as a single step.
+>   - Popup opens on clip hover (when clip is ≥ 48 px wide) and stays open when the mouse moves into the popup itself (150 ms close delay).
+> - **Why:** Knobs inside `overflow-hidden` clips were being clipped and were uninteractable because `window.addEventListener` mouse events are unreliable once the pointer leaves the element. The portal + pointer-capture approach makes them fully reliable. Undo/redo was added so users can freely experiment without fear of losing their previous settings.
+> - **Files:**
+>   - `src/app/video-maker/store.tsx` — `SNAPSHOT_FOR_UNDO` action; `patchClipsNoHistory` helper; four `*_PREVIEW` action variants
+>   - `src/app/video-maker/_components/ClipBlock.tsx` — full rewrite: `createPortal` popup, pointer-capture knob drag, snapshot-on-drag-start pattern, volume bar in popup
+
+---
+
+> ### Video Clip Split Display — Top Half Frames, Bottom Half Waveform
+>
+> - **What changed:** Video clips on the timeline now display in two vertical halves: the **top 50%** shows the thumbnail frame strip (repeating preview frames), and the **bottom 50%** shows the audio waveform extracted from the video file. A subtle divider line separates the two sections.
+> - **Why:** Users requested the ability to see and interact with the audio waveform inside video clips directly on the timeline, enabling visual volume drag by feel. Having the frame strip alongside the waveform also makes it clearer which visual content corresponds to which audio.
+> - **Files:**
+>   - `src/app/video-maker/_components/MediaPanel.tsx` — waveform is now extracted from video files too (not just audio), using `AudioContext.decodeAudioData` on the video blob
+>   - `src/app/video-maker/_components/ClipBlock.tsx` — video clips render top-half thumbnail + bottom-half waveform; shared `renderWaveform` helper
+
+---
+
+### 🐛 Bug Fixes
+
+---
+
+> ### Fix: Video Fast-Forwards Without Sound on Play
+>
+> - **What changed:** Removed the on-mount Web Audio graph setup for the `<video>` element. The video's Web Audio graph (for pitch/tone) is now built **lazily on the first play click**, after `Tone.start()` has resumed the AudioContext.
+> - **Why:** Connecting a `<video>` element to `createMediaElementSource` on component mount captures its audio stream into the Web Audio graph immediately. Since browsers suspend the AudioContext until a user gesture (autoplay policy), the video's audio was silently dropped into a non-running graph. In some browsers this also caused `currentTime` to behave erratically, making the seek-drift correction fire repeatedly and producing a fast-forward effect. Building the graph only after `Tone.start()` has confirmed the context is running eliminates both the silence and the jitter.
+> - **Files:**
+>   - `src/app/video-maker/_components/Preview.tsx`
+
+---
+
+> ### Fix: Volume Not Applied to Video Clips in Preview
+>
+> - **What changed:** Added `video.volume = clip.volume ?? 1` to the video sync effect that fires on every playhead update.
+> - **Why:** The `<video>` element's native volume was never set from `clip.volume`, so dragging a video clip's volume had no audible effect during preview (though it was correctly applied at export via FFmpeg).
+> - **Files:**
+>   - `src/app/video-maker/_components/Preview.tsx`
+
+---
+
+> ### Fix: Pitch & Tone Not Affecting Video Clip Audio in Preview
+>
+> - **What changed:** Added a Web Audio processing graph (PitchShift + two-band EQ) for the `<video>` element, mirroring what `AudioTrackPlayer` does for audio tracks. The graph is built lazily on first play. A separate effect updates pitch routing and EQ gain values whenever the active video clip changes.
+> - **Why:** The existing pitch/tone Web Audio graph only applied to `<audio>` elements (audio tracks). Video clips played through the `<video>` element which had no graph, so pitch and tone knob changes had no audible effect in preview even though they were correctly exported.
+> - **Files:**
+>   - `src/app/video-maker/_components/Preview.tsx`
+
+---
+
+### 💅 UI Improvements
+
+---
+
+> ### Scaled Up UI — Larger Tracks, Sidebar, Controls
+>
+> - **What changed:**
+>   - Track height: 56 px → 72 px; track header width: 160 px → 176 px
+>   - Sidebar width: `w-72` (288 px) → `w-80` (320 px)
+>   - Header bar: larger padding, `text-base` title, bigger logo icon (`h-8 w-8`)
+>   - Timeline ruler: `h-6` → `h-8`; time labels `text-[9px]` → `text-[11px]`; toolbar buttons and zoom controls increased to `text-sm`
+>   - Seek bar: `h-2` → `h-3`; time displays `text-xs` → `text-sm`
+>   - Play/pause button: `h-10 w-10` → `h-12 w-12`; icons `h-4 w-4` → `h-5 w-5`
+>   - Export button: larger padding and `text-sm` font
+>   - Media panel: video thumbnails `h-28` → `h-36`; audio thumbnails `h-14` → `h-20`; item name `text-[11px]` → `text-xs`
+>   - Clip block label: `text-[10px]` → `text-xs`; track header icons `h-3.5` → `h-4`
+> - **Why:** The editor felt too zoomed-out at typical screen sizes, making clips, controls, and text hard to target and read.
+> - **Files:**
+>   - `src/app/video-maker/page.tsx`
+>   - `src/app/video-maker/_components/Timeline.tsx`
+>   - `src/app/video-maker/_components/TrackRow.tsx`
+>   - `src/app/video-maker/_components/ClipBlock.tsx`
+>   - `src/app/video-maker/_components/Preview.tsx`
+>   - `src/app/video-maker/_components/MediaPanel.tsx`
+
+---
+
 ## 🗓️ **2026-03-24**
 
 ---
 
 ### ✨ Features
+
+---
+
+> ### Per-Clip Volume Drag, Pitch, Tempo & Tone Knobs
+>
+> - **What changed:**
+>   - **Volume drag**: Dragging a clip body vertically (up = louder, down = quieter) now adjusts clip volume in real time. Waveform bar heights and clip opacity scale proportionally as visual feedback. Works on both video and audio clips.
+>   - **Hover knobs**: Three rotary knobs appear on any clip wider than 72 px when hovered. Drag up to increase, down to decrease.
+>     - **Tempo** (0.25×–2×) — real-time via `audio.playbackRate`, also applied at export.
+>     - **Pitch** (±12 semitones) — real-time via Tone.js `PitchShift` (phase vocoder); PitchShift node is bypassed entirely when pitch = 0 to avoid adding latency.
+>     - **Tone** (−1 warm/throaty → +1 bright/nasal) — real-time via two Web Audio API `BiquadFilter` peaking EQ nodes (200 Hz and 3 kHz), zero latency.
+>   - Non-zero pitch / tone values show compact badges on the clip so they remain visible when not hovering.
+>   - All four values are included in the export manifest and applied in FFmpeg: `asetrate`+`atempo` for pitch, `equalizer` filters for tone.
+> - **Why:** Gives users direct, in-place control over clip audio character without leaving the timeline. Pitch and tone are particularly useful for matching voice clips recorded in different environments.
+> - **Files:**
+>   - `src/app/video-maker/types.ts` — added `pitch: number` and `tone: number` to `Clip`
+>   - `src/app/video-maker/store.tsx` — `SET_CLIP_PITCH`, `SET_CLIP_TONE` actions; `ADD_CLIP` defaults both to 0 for backward compat
+>   - `src/app/video-maker/_components/ClipBlock.tsx` — direction-detecting drag (vertical = volume, horizontal = move), `Knob` component, hover overlay, pitch/tone badges
+>   - `src/app/video-maker/_components/Timeline.tsx` — new clip literal includes `pitch: 0, tone: 0`
+>   - `src/app/video-maker/_components/Preview.tsx` — `AudioTrackPlayer` builds a Web Audio graph (MediaElementSource → PitchShift → EqLow → EqHigh → destination); pitch routing is switched in/out dynamically; Tone.js context started lazily on first play
+>   - `src/app/api/video-maker/export/route.ts` — `audioProcessingFilters()` helper applies `asetrate`+`atempo` for pitch and dual `equalizer` for tone in the FFmpeg filter chain
+
+---
+
+> ### Dual Playhead System — White Play Head & Violet Edit Cursor
+>
+> - **What changed:** Replaced the single playhead with two independent cursors. The **white head** (play position) is set only by clicking on the ruler or tracks and advances during playback — it determines where play starts from. The **violet head** (edit cursor) follows the mouse at all times, including during playback, and is used exclusively for editing operations (split, paste, delete, keyboard shortcuts). Both heads are rendered as lines through the full track area with matching diamond markers on the ruler.
+> - **Why:** Previously, hovering the timeline during playback was blocked, and there was no way to position the edit point independently from the play position. Separating the two allows users to set up split/paste operations while audio/video is still running.
+> - **Files:**
+>   - `src/app/video-maker/store.tsx` — added `editCursor` state field and `SET_EDIT_CURSOR` action
+>   - `src/app/video-maker/_components/Timeline.tsx` — ruler hover → `SET_EDIT_CURSOR`, ruler click/drag → `SET_PLAYHEAD`; all keyboard shortcuts and paste now use `editCursor`
+>   - `src/app/video-maker/_components/ClipBlock.tsx` — split button uses `editCursor` instead of `playhead`
+
+---
+
+> ### Fix: Timeline Drop Position Misalignment at Any Zoom Level
+>
+> - **What changed:** Replaced the drop-position calculation in `TrackRow` from `e.currentTarget.getBoundingClientRect().left + HEADER_W` to measuring directly from the clip area element's own bounding rect via a `clipAreaRef`.
+> - **Why:** The old calculation subtracted a hard-coded `HEADER_W` constant from the full row's rect, which could drift from the actual rendered header width due to borders or scroll offsets, causing clips to land 1–2 seconds off from where they were dropped. Measuring from the clip area element directly eliminates all such offsets regardless of zoom or scroll position.
+> - **Files:**
+>   - `src/app/video-maker/_components/TrackRow.tsx`
+
+---
+
+> ### Fix: Audio Waveform Shows Correct Segment After Split
+>
+> - **What changed:** Audio clip waveforms now display only the samples corresponding to the clip's `trimStart`/`trimEnd` range. The SVG `viewBox` is updated to match the sliced sample count so the waveform stretches correctly across the trimmed width.
+> - **Why:** After splitting a clip, both halves referenced the same full 120-sample waveform array. Since the SVG used `preserveAspectRatio="none"`, the full waveform was squashed into each shorter clip, making it appear as if the same wave pattern repeated at each second.
+> - **Files:**
+>   - `src/app/video-maker/_components/ClipBlock.tsx`
+
+---
+
+> ### Fix: Audio Glitch & Repeated Segment at Split Point During Playback
+>
+> - **What changed:** Rewrote `AudioTrackPlayer` in `Preview.tsx` to stop re-seeking the audio element on every RAF frame. The audio now plays natively between same-source clip transitions; a seek is only issued when the source file changes, when transitioning to a different clip with significant drift (> 0.15 s), or when scrubbing while paused.
+> - **Why:** The previous implementation dispatched a corrective seek on every playhead update (~60 fps). At split points, the audio was already at the correct position but was being seeked back to `trimStart`, causing a brief stutter/repeat of the audio at exactly the split moment. Removing the continuous drift-correction seek eliminates both glitches.
+> - **Files:**
+>   - `src/app/video-maker/_components/Preview.tsx`
 
 ---
 

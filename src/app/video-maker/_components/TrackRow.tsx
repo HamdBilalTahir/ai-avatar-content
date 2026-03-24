@@ -1,5 +1,5 @@
 'use client';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useEditor } from '../store';
 import {
   getDraggingMedia,
@@ -17,8 +17,8 @@ interface Props {
   onDrop: (mediaItemId: string, trackId: string, timelineStart: number) => void;
 }
 
-const TRACK_HEIGHT = 56;
-const HEADER_W = 160;
+const TRACK_HEIGHT = 72;
+const HEADER_W = 176;
 
 export default function TrackRow({
   track,
@@ -29,6 +29,7 @@ export default function TrackRow({
 }: Props) {
   const { dispatch } = useEditor();
   const [isDragOver, setIsDragOver] = useState(false);
+  const clipAreaRef = useRef<HTMLDivElement>(null);
 
   function handleDragOver(e: React.DragEvent) {
     e.preventDefault();
@@ -53,11 +54,11 @@ export default function TrackRow({
 
     if (!mediaItemId) return;
 
-    // Calculate timeline position: subtract the header width from the click X
-    const rect = e.currentTarget.getBoundingClientRect();
-    const xInRow = e.clientX - rect.left;
-    const xInClipArea = Math.max(0, xInRow - HEADER_W);
-    const timelineStart = xInClipArea / zoom;
+    // Measure directly from the clip area element — no HEADER_W subtraction needed,
+    // so zoom changes and border/padding differences can't introduce an offset.
+    const rect = clipAreaRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const timelineStart = Math.max(0, (e.clientX - rect.left) / zoom);
 
     onDrop(mediaItemId, track.id, timelineStart);
   }
@@ -86,13 +87,13 @@ export default function TrackRow({
     >
       {/* Track header — not a drop target itself, events bubble up to the row */}
       <div
-        className={`flex w-40 flex-shrink-0 items-center justify-between border-r px-2 ${headerBg}`}
+        className={`flex w-44 flex-shrink-0 items-center justify-between border-r px-3 ${headerBg}`}
         style={{ minWidth: HEADER_W }}
       >
         <div className="flex items-center gap-1.5 min-w-0">
           {isVideo ? (
             <svg
-              className="h-3.5 w-3.5 flex-shrink-0 text-violet-500"
+              className="h-4 w-4 flex-shrink-0 text-violet-500"
               viewBox="0 0 24 24"
               fill="currentColor"
             >
@@ -100,14 +101,14 @@ export default function TrackRow({
             </svg>
           ) : (
             <svg
-              className="h-3.5 w-3.5 flex-shrink-0 text-emerald-600"
+              className="h-4 w-4 flex-shrink-0 text-emerald-600"
               viewBox="0 0 24 24"
               fill="currentColor"
             >
               <path d="M9 18V6l12-2v12M9 18a3 3 0 1 1-6 0 3 3 0 0 1 6 0zM21 16a3 3 0 1 1-6 0 3 3 0 0 1 6 0z" />
             </svg>
           )}
-          <span className="truncate text-[11px] font-semibold text-slate-700">
+          <span className="truncate text-xs font-semibold text-slate-700">
             {track.name}
           </span>
         </div>
@@ -123,7 +124,7 @@ export default function TrackRow({
           >
             {track.muted ? (
               <svg
-                className="h-3.5 w-3.5"
+                className="h-4 w-4"
                 viewBox="0 0 24 24"
                 fill="none"
                 stroke="currentColor"
@@ -135,7 +136,7 @@ export default function TrackRow({
               </svg>
             ) : (
               <svg
-                className="h-3.5 w-3.5"
+                className="h-4 w-4"
                 viewBox="0 0 24 24"
                 fill="none"
                 stroke="currentColor"
@@ -155,7 +156,7 @@ export default function TrackRow({
             className="rounded p-0.5 text-slate-300 hover:text-red-500 transition"
           >
             <svg
-              className="h-3.5 w-3.5"
+              className="h-4 w-4"
               viewBox="0 0 24 24"
               fill="none"
               stroke="currentColor"
@@ -169,6 +170,7 @@ export default function TrackRow({
 
       {/* Clip area */}
       <div
+        ref={clipAreaRef}
         className={`relative overflow-hidden border-l border-slate-200 ${isDragOver ? '' : trackBg}`}
         style={{ width: timelineWidth, minWidth: timelineWidth }}
       >

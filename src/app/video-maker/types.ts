@@ -19,8 +19,10 @@ export interface Clip {
   timelineStart: number; // seconds from timeline origin
   trimStart: number; // seconds removed from source start
   trimEnd: number; // seconds removed from source end
-  speed: number; // 0.25 | 0.5 | 1 | 1.5 | 2
+  speed: number; // 0.25–2 (tempo multiplier)
   volume: number; // 0–1
+  pitch: number; // semitones, -12 to +12 (applied at export)
+  tone: number; // -1 (warm/throat) to +1 (bright/nasal), applied at export
 }
 
 export interface Track {
