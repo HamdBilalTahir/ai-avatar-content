@@ -7,7 +7,7 @@ import Preview from './_components/Preview';
 import Timeline from './_components/Timeline';
 
 function ExportButton() {
-  const { state, activeProject } = useEditor();
+  const { state, activeProject, dispatch } = useEditor();
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
 
@@ -16,7 +16,13 @@ function ExportButton() {
     setExportError(null);
     setExporting(true);
     try {
-      // Step 1: upload any media not yet on server
+      // Step 1: upload any media not yet on server; collect resolved server paths
+      const serverPaths = new Map<string, string>(
+        state.mediaItems
+          .filter((m) => m.serverPath)
+          .map((m) => [m.id, m.serverPath!])
+      );
+
       const toUpload = state.mediaItems.filter(
         (m) =>
           activeProject.clips.some((c) => c.mediaItemId === m.id) &&
@@ -38,9 +44,16 @@ function ExportButton() {
           body: form,
         });
         if (!res.ok) throw new Error('Upload failed for ' + item.name);
+        const { serverPath } = (await res.json()) as { serverPath: string };
+        serverPaths.set(item.id, serverPath);
+        dispatch({
+          type: 'SET_MEDIA_SERVER_PATH',
+          itemId: item.id,
+          serverPath,
+        });
       }
 
-      // Step 2: build export manifest
+      // Step 2: build export manifest using freshly resolved server paths
       const manifest = {
         projectId: activeProject.id,
         tracks: activeProject.tracks,
@@ -48,7 +61,7 @@ function ExportButton() {
           const media = state.mediaItems.find((m) => m.id === clip.mediaItemId);
           return {
             ...clip,
-            serverPath: media?.serverPath ?? null,
+            serverPath: serverPaths.get(clip.mediaItemId) ?? null,
             mediaDuration: media?.duration ?? 0,
           };
         }),

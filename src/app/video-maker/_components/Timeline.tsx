@@ -262,9 +262,7 @@ export default function Timeline() {
       trimStart: 0,
       trimEnd: 0,
       speed: 1,
-      volume: 1,
-      pitch: 0,
-      tone: 0,
+      volume: 100,
     };
     dispatch({ type: 'ADD_CLIP', clip });
     dispatch({ type: 'SELECT_CLIP', clipId: clip.id });

@@ -12,42 +12,9 @@ interface ExportClip {
   trimStart: number;
   trimEnd: number;
   speed: number;
-  volume: number;
-  pitch: number; // semitones, -12 to +12
-  tone: number; // -1 (warm) to +1 (bright)
+  volume: number; // 0–100
   serverPath: string | null;
   mediaDuration: number;
-}
-
-/**
- * Build the FFmpeg audio filter chain for a clip's pitch + tone adjustments.
- * Pitch uses asetrate+atempo (pitch shift without tempo change).
- * Tone uses two peaking EQ bands (200 Hz warm vs 3 kHz bright).
- */
-function audioProcessingFilters(clip: ExportClip): string {
-  const filters: string[] = [];
-
-  // Pitch: change sample rate to shift pitch, then time-stretch back to original tempo
-  const p = clip.pitch ?? 0;
-  if (p !== 0) {
-    const factor = Math.pow(2, p / 12);
-    const newRate = Math.round(44100 * factor);
-    const atempoBack = (1 / factor).toFixed(6);
-    filters.push(`asetrate=${newRate}`, `atempo=${atempoBack}`);
-  }
-
-  // Tone: simple 2-band peaking EQ (warm = bass up + treble down, bright = opposite)
-  const t = clip.tone ?? 0;
-  if (Math.abs(t) > 0.01) {
-    const bassGain = (-t * 5).toFixed(2);
-    const trebleGain = (t * 5).toFixed(2);
-    filters.push(
-      `equalizer=f=200:width_type=o:width=2:g=${bassGain}`,
-      `equalizer=f=3000:width_type=o:width=2:g=${trebleGain}`
-    );
-  }
-
-  return filters.length > 0 ? ',' + filters.join(',') : '';
 }
 
 interface ExportTrack {
@@ -63,9 +30,19 @@ interface ExportManifest {
   clips: ExportClip[];
 }
 
+/**
+ * Build atempo filter chain. atempo accepts 0.5–2.0 so chain for edge values.
+ * Only returns a non-empty string when speed != 1.
+ */
+function atempoChain(speed: number): string {
+  if (speed === 1) return '';
+  // Chain two atempo filters when speed < 0.5 (min is 0.25 = 0.5*0.5)
+  if (speed <= 0.5) return `atempo=${speed * 2},atempo=0.5`;
+  return `atempo=${speed}`;
+}
+
 function runFFmpeg(args: string[]): Promise<void> {
   return new Promise((resolve, reject) => {
-    // Try system ffmpeg first; falls back gracefully
     const proc = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'] });
     let stderr = '';
     proc.stderr?.on('data', (d: Buffer) => {
@@ -95,7 +72,6 @@ export async function POST(req: NextRequest) {
 
   const { projectId, tracks, clips } = manifest;
 
-  // Validate all clips have server paths
   const missing = clips.filter((c) => !c.serverPath);
   if (missing.length > 0) {
     return NextResponse.json(
@@ -107,12 +83,10 @@ export async function POST(req: NextRequest) {
   const outDir = path.join(process.cwd(), 'storage', 'video-maker', projectId);
   await mkdir(outDir, { recursive: true });
 
-  // Sort clips by timeline start
   const sortedClips = [...clips].sort(
     (a, b) => a.timelineStart - b.timelineStart
   );
 
-  // Build a concat list per track type
   const videoClips = sortedClips.filter((c) => {
     const track = tracks.find((t) => t.id === c.trackId);
     return track?.type === 'video' && !track.muted;
@@ -127,7 +101,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'No clips to export' }, { status: 422 });
   }
 
-  // Write a concat file for video clips
   const tmpFiles: string[] = [];
   const concatListPath = path.join(outDir, `concat_${Date.now()}.txt`);
   const outputPath = path.join(outDir, `export_${Date.now()}.mp4`);
@@ -135,27 +108,37 @@ export async function POST(req: NextRequest) {
 
   try {
     if (videoClips.length > 0) {
-      // Process each video clip individually (trim + speed)
       const processedPaths: string[] = [];
+
       for (const clip of videoClips) {
         const src = path.join(process.cwd(), clip.serverPath!);
         if (!existsSync(src)) continue;
 
-        const effectiveDuration =
-          (clip.mediaDuration - clip.trimStart - clip.trimEnd) / clip.speed;
+        const trimmedDuration =
+          clip.mediaDuration - clip.trimStart - clip.trimEnd;
+        const effectiveDuration = trimmedDuration / clip.speed;
         const outClip = path.join(outDir, `clip_${clip.id}.mp4`);
         tmpFiles.push(outClip);
 
+        const vol = (clip.volume / 100).toFixed(4);
+        const audioFilters =
+          [atempoChain(clip.speed), `volume=${vol}`]
+            .filter(Boolean)
+            .join(',') || 'anull';
+
+        // Always re-encode video to ensure a keyframe at the start of every
+        // clip — copying the stream can leave the first frame without its
+        // reference frames, which video players render as black.
         const args = [
           '-y',
           '-ss',
           String(clip.trimStart),
           '-t',
-          String(clip.mediaDuration - clip.trimStart - clip.trimEnd),
+          String(trimmedDuration),
           '-i',
           src,
           '-filter_complex',
-          `[0:v]setpts=${1 / clip.speed}*PTS[v];[0:a]volume=${clip.volume},atempo=${clip.speed}${audioProcessingFilters(clip)}[a]`,
+          `[0:v]setpts=${1 / clip.speed}*PTS[v];[0:a]${audioFilters}[a]`,
           '-map',
           '[v]',
           '-map',
@@ -164,10 +147,12 @@ export async function POST(req: NextRequest) {
           String(effectiveDuration),
           '-c:v',
           'libx264',
+          '-crf',
+          '18',
           '-c:a',
           'aac',
-          '-preset',
-          'fast',
+          '-b:a',
+          '192k',
           outClip,
         ];
 
@@ -182,12 +167,10 @@ export async function POST(req: NextRequest) {
         );
       }
 
-      // Write concat file
       const concatContent = processedPaths.map((p) => `file '${p}'`).join('\n');
       await writeFile(concatListPath, concatContent);
 
       if (audioClips.length === 0) {
-        // Video only
         await runFFmpeg([
           '-y',
           '-f',
@@ -201,7 +184,6 @@ export async function POST(req: NextRequest) {
           outputPath,
         ]);
       } else {
-        // Concat video, then mix in audio tracks
         const concatOut = path.join(outDir, `concat_${Date.now()}.mp4`);
         tmpFiles.push(concatOut);
 
@@ -218,17 +200,35 @@ export async function POST(req: NextRequest) {
           concatOut,
         ]);
 
-        // Build ffmpeg inputs for audio mixing
-        const audioInputs: string[] = [];
+        const audioInputArgs: string[] = [];
         const filterParts: string[] = [];
         let audioIdx = 1;
+
         for (const clip of audioClips) {
           const src = path.join(process.cwd(), clip.serverPath!);
           if (!existsSync(src)) continue;
-          audioInputs.push('-ss', String(clip.trimStart), '-i', src);
-          filterParts.push(
-            `[${audioIdx}:a]volume=${clip.volume},atempo=${clip.speed}${audioProcessingFilters(clip)},adelay=${Math.round(clip.timelineStart * 1000)}|${Math.round(clip.timelineStart * 1000)}[a${audioIdx}]`
+
+          const trimmedDur = clip.mediaDuration - clip.trimStart - clip.trimEnd;
+          const vol = (clip.volume / 100).toFixed(4);
+          const delay = Math.round(clip.timelineStart * 1000);
+
+          const audioFilters = [
+            atempoChain(clip.speed),
+            `volume=${vol}`,
+            `adelay=${delay}|${delay}`,
+          ]
+            .filter(Boolean)
+            .join(',');
+
+          audioInputArgs.push(
+            '-ss',
+            String(clip.trimStart),
+            '-t',
+            String(trimmedDur),
+            '-i',
+            src
           );
+          filterParts.push(`[${audioIdx}:a]${audioFilters}[a${audioIdx}]`);
           audioIdx++;
         }
 
@@ -239,14 +239,14 @@ export async function POST(req: NextRequest) {
           ).join('');
           const filterComplex = [
             ...filterParts,
-            `[0:a]${mixInputs}amix=inputs=${audioIdx}:duration=first[aout]`,
+            `[0:a]${mixInputs}amix=inputs=${audioIdx}:normalize=0:duration=longest[aout]`,
           ].join(';');
 
           await runFFmpeg([
             '-y',
             '-i',
             concatOut,
-            ...audioInputs,
+            ...audioInputArgs,
             '-filter_complex',
             filterComplex,
             '-map',
@@ -265,33 +265,52 @@ export async function POST(req: NextRequest) {
       }
     } else {
       // Audio-only export
-      const audioInputs: string[] = [];
+      const audioInputArgs: string[] = [];
       const filterParts: string[] = [];
       let idx = 0;
+
       for (const clip of audioClips) {
         const src = path.join(process.cwd(), clip.serverPath!);
         if (!existsSync(src)) continue;
-        audioInputs.push('-ss', String(clip.trimStart), '-i', src);
-        filterParts.push(
-          `[${idx}:a]volume=${clip.volume},atempo=${clip.speed}${audioProcessingFilters(clip)},adelay=${Math.round(clip.timelineStart * 1000)}|${Math.round(clip.timelineStart * 1000)}[a${idx}]`
+
+        const trimmedDur = clip.mediaDuration - clip.trimStart - clip.trimEnd;
+        const vol = (clip.volume / 100).toFixed(4);
+        const delay = Math.round(clip.timelineStart * 1000);
+
+        const audioFilters = [
+          atempoChain(clip.speed),
+          `volume=${vol}`,
+          `adelay=${delay}|${delay}`,
+        ]
+          .filter(Boolean)
+          .join(',');
+
+        audioInputArgs.push(
+          '-ss',
+          String(clip.trimStart),
+          '-t',
+          String(trimmedDur),
+          '-i',
+          src
         );
+        filterParts.push(`[${idx}:a]${audioFilters}[a${idx}]`);
         idx++;
       }
+
       const mixInputs = Array.from({ length: idx }, (_, i) => `[a${i}]`).join(
         ''
       );
       await runFFmpeg([
         '-y',
-        ...audioInputs,
+        ...audioInputArgs,
         '-filter_complex',
-        `${filterParts.join(';')};${mixInputs}amix=inputs=${idx}:duration=first`,
+        `${filterParts.join(';')};${mixInputs}amix=inputs=${idx}:normalize=0:duration=longest`,
         '-c:a',
         'aac',
         outputPath,
       ]);
     }
 
-    // Stream file back to client
     const { createReadStream } = await import('fs');
     const { Readable } = await import('stream');
     const fileStream = createReadStream(outputPath);
@@ -308,7 +327,6 @@ export async function POST(req: NextRequest) {
     const message = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ error: message }, { status: 500 });
   } finally {
-    // Clean up temp clip files (not the output)
     for (const f of tmpFiles) {
       if (existsSync(f)) unlink(f).catch(() => {});
     }

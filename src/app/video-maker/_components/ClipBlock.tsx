@@ -21,9 +21,9 @@ interface BarProps {
   label: string;
   format?: (v: number) => string;
   color: string; // Tailwind bg class e.g. 'bg-violet-400'
-  centered?: boolean; // show center-line marker (for pitch/tone which have a 0 mid-point)
   onDragStart: () => void;
   onChange: (v: number) => void;
+  onReset?: () => void;
 }
 
 const BAR_H = 52;
@@ -35,9 +35,9 @@ function Bar({
   label,
   format,
   color,
-  centered,
   onDragStart,
   onChange,
+  onReset,
 }: BarProps) {
   const startY = useRef(0);
   const startVal = useRef(0);
@@ -82,7 +82,8 @@ function Bar({
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerUp}
-        title={`${label}: ${displayVal} — drag up/down`}
+        onDoubleClick={onReset}
+        title={`${label}: ${displayVal} — drag up/down${onReset ? ', double-click to reset' : ''}`}
       >
         {/* Track */}
         <div className="absolute inset-0 bg-white/15 rounded" />
@@ -91,13 +92,6 @@ function Bar({
           className={`absolute inset-x-0 bottom-0 rounded ${color}`}
           style={{ height: fillH }}
         />
-        {/* Center marker for bipolar controls */}
-        {centered && (
-          <div
-            className="absolute inset-x-0 bg-white/50"
-            style={{ top: '50%', height: 1 }}
-          />
-        )}
       </div>
       <span className="text-[8px] font-semibold text-white/80 whitespace-nowrap">
         {label}
@@ -123,9 +117,6 @@ export default function ClipBlock({ clip, zoom }: Props) {
   const clipRef = useRef<HTMLDivElement>(null);
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const snapshotTaken = useRef(false);
-
-  const pitch = clip.pitch ?? 0;
-  const tone = clip.tone ?? 0;
 
   const duration = media ? effectiveDuration(clip, media.duration) : 1;
   const width = Math.max(8, duration * zoom);
@@ -212,14 +203,14 @@ export default function ClipBlock({ clip, zoom }: Props) {
       const newVol = Math.max(
         0,
         Math.min(
-          1,
-          dragStartVolume.current + (dragStartY.current - e.clientY) / 80
+          100,
+          dragStartVolume.current + (dragStartY.current - e.clientY) / 0.8
         )
       );
       dispatch({
         type: 'SET_CLIP_VOLUME_PREVIEW',
         clipId: clip.id,
-        volume: newVol,
+        volume: Math.round(newVol),
       });
     }
   }
@@ -347,7 +338,7 @@ export default function ClipBlock({ clip, zoom }: Props) {
         viewBox={`0 0 ${Math.max(1, samples.length)} ${heightPx}`}
       >
         {samples.map((v, i) => {
-          const h = Math.max(1, v * (heightPx * 0.8) * clip.volume);
+          const h = Math.max(1, v * (heightPx * 0.8) * (clip.volume / 100));
           return (
             <rect
               key={i}
@@ -375,7 +366,7 @@ export default function ClipBlock({ clip, zoom }: Props) {
           width: Math.max(8, width),
           height: TRACK_HEIGHT - 8,
           top: 4,
-          opacity: 0.4 + clip.volume * 0.6,
+          opacity: 0.4 + (clip.volume / 100) * 0.6,
           transition: 'left 150ms ease-out, width 150ms ease-out',
         }}
         onPointerDown={onClipPointerDown}
@@ -440,23 +431,6 @@ export default function ClipBlock({ clip, zoom }: Props) {
             )}
           </span>
         </div>
-
-        {/* Non-default pitch / tone badges */}
-        {!knobsOpen && (pitch !== 0 || tone !== 0) && (
-          <div className="absolute top-0.5 right-2 flex gap-0.5 pointer-events-none">
-            {pitch !== 0 && (
-              <span className="text-[7px] bg-black/40 text-white rounded px-0.5">
-                {pitch > 0 ? '+' : ''}
-                {pitch.toFixed(1)}st
-              </span>
-            )}
-            {tone !== 0 && (
-              <span className="text-[7px] bg-black/40 text-white rounded px-0.5">
-                {tone > 0 ? '▲' : '▼'}tone
-              </span>
-            )}
-          </div>
-        )}
 
         {/* Knob toggle button (visible on hover) */}
         {showKnobsBtn && (
@@ -608,59 +582,56 @@ export default function ClipBlock({ clip, zoom }: Props) {
               }
             />
             <Bar
-              value={pitch}
-              min={-12}
-              max={12}
-              label="Pitch"
-              color="bg-blue-400"
-              centered
-              format={(v: number) =>
-                (v >= 0 ? `+${v.toFixed(1)}` : v.toFixed(1)) + 'st'
-              }
-              onDragStart={snapshotOnce}
-              onChange={(v: number) =>
-                dispatch({
-                  type: 'SET_CLIP_PITCH_PREVIEW',
-                  clipId: clip.id,
-                  pitch: Math.round(v * 10) / 10,
-                })
-              }
-            />
-            <Bar
-              value={tone}
-              min={-1}
-              max={1}
-              label="Tone"
-              color="bg-amber-400"
-              centered
-              format={(v: number) =>
-                v >= 0 ? `+${v.toFixed(2)}` : v.toFixed(2)
-              }
-              onDragStart={snapshotOnce}
-              onChange={(v: number) =>
-                dispatch({
-                  type: 'SET_CLIP_TONE_PREVIEW',
-                  clipId: clip.id,
-                  tone: Math.round(v * 100) / 100,
-                })
-              }
-            />
-            <Bar
               value={clip.volume}
               min={0}
-              max={1}
+              max={100}
               label="Volume"
               color="bg-emerald-400"
-              format={(v: number) => `${Math.round(v * 100)}%`}
+              format={(v: number) => `${Math.round(v)}%`}
               onDragStart={snapshotOnce}
               onChange={(v: number) =>
                 dispatch({
                   type: 'SET_CLIP_VOLUME_PREVIEW',
                   clipId: clip.id,
-                  volume: v,
+                  volume: Math.round(v),
                 })
               }
+              onReset={() => {
+                snapshotOnce();
+                dispatch({
+                  type: 'SET_CLIP_VOLUME_PREVIEW',
+                  clipId: clip.id,
+                  volume: 100,
+                });
+              }}
             />
+            <button
+              onClick={() => {
+                dispatch({ type: 'SNAPSHOT_FOR_UNDO' });
+                dispatch({
+                  type: 'SET_CLIP_VOLUME',
+                  clipId: clip.id,
+                  volume: 100,
+                });
+                dispatch({ type: 'SET_CLIP_SPEED', clipId: clip.id, speed: 1 });
+              }}
+              title="Reset to defaults"
+              className="ml-2 flex items-center justify-center rounded-full bg-slate-700/50 p-2 text-slate-300 hover:bg-slate-600 hover:text-white transition-colors"
+            >
+              <svg
+                className="w-4 h-4"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+                />
+              </svg>
+            </button>
           </div>,
           document.body
         )}

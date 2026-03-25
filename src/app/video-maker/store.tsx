@@ -36,6 +36,10 @@ const INITIAL_STATE: EditorState = {
 
 // ─── Actions ─────────────────────────────────────────────────────────────────
 
+function createId() {
+  return Math.random().toString(36).slice(2, 9);
+}
+
 export type EditorAction =
   | { type: 'UNDO' }
   | { type: 'REDO' }
@@ -61,8 +65,6 @@ export type EditorAction =
   | { type: 'SPLIT_CLIP'; clipId: string; atTime: number; newClipId: string }
   | { type: 'SET_CLIP_SPEED'; clipId: string; speed: number }
   | { type: 'SET_CLIP_VOLUME'; clipId: string; volume: number }
-  | { type: 'SET_CLIP_PITCH'; clipId: string; pitch: number }
-  | { type: 'SET_CLIP_TONE'; clipId: string; tone: number }
   | { type: 'DELETE_CLIP'; clipId: string }
   | { type: 'SET_PLAYHEAD'; time: number }
   | { type: 'ADVANCE_PLAYHEAD'; dt: number }
@@ -73,9 +75,7 @@ export type EditorAction =
   | { type: 'SET_MEDIA_TAB'; tab: 'videos' | 'audio' }
   | { type: 'SNAPSHOT_FOR_UNDO' }
   | { type: 'SET_CLIP_VOLUME_PREVIEW'; clipId: string; volume: number }
-  | { type: 'SET_CLIP_SPEED_PREVIEW'; clipId: string; speed: number }
-  | { type: 'SET_CLIP_PITCH_PREVIEW'; clipId: string; pitch: number }
-  | { type: 'SET_CLIP_TONE_PREVIEW'; clipId: string; tone: number };
+  | { type: 'SET_CLIP_SPEED_PREVIEW'; clipId: string; speed: number };
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -298,43 +298,125 @@ function reducer(state: EditorState, action: EditorAction): EditorState {
     case 'ADD_CLIP': {
       const project = getProject(state);
       if (!project) return state;
-      const clip: Clip = {
-        ...action.clip,
-        pitch: action.clip.pitch ?? 0,
-        tone: action.clip.tone ?? 0,
-      }; // defaults for clips loaded from old localStorage
+
+      const clip: Clip = { ...action.clip };
+
+      const newClips = [...project.clips];
+      const mediaItem = state.mediaItems.find(
+        (m) => m.id === action.clip.mediaItemId
+      );
+      let updatedTracks = [...project.tracks];
+
+      if (mediaItem && mediaItem.type === 'video') {
+        let audioTrack = updatedTracks.find(
+          (t) => t.type === 'audio' && !t.muted
+        );
+        if (!audioTrack) {
+          audioTrack = {
+            id: `track-${Date.now()}-a`,
+            type: 'audio',
+            name: `Audio ${updatedTracks.filter((t) => t.type === 'audio').length + 1}`,
+            muted: false,
+          };
+          updatedTracks.push(audioTrack);
+        }
+
+        if (audioTrack) {
+          // Add the video clip but with 0 volume
+          newClips.push({ ...clip, volume: 0 });
+          // Add the extracted audio clip
+          newClips.push({
+            ...clip,
+            id: createId(),
+            trackId: audioTrack.id,
+            // Keep all the properties synced initially except volume
+          });
+        } else {
+          newClips.push(clip);
+        }
+      } else {
+        newClips.push(clip);
+      }
+
       return updateProject(state, {
         ...project,
-        clips: [...project.clips, clip],
+        tracks: updatedTracks,
+        clips: newClips,
         updatedAt: Date.now(),
       });
     }
 
     case 'MOVE_CLIP':
-      return patchClips(state, (clips) =>
-        clips.map((c) =>
-          c.id === action.clipId
-            ? {
+      return patchClips(state, (clips) => {
+        // Find the clip being moved to see if it's a video clip
+        const movedClip = clips.find((c) => c.id === action.clipId);
+
+        return clips.map((c) => {
+          // Update the moved clip
+          if (c.id === action.clipId) {
+            return {
+              ...c,
+              timelineStart: Math.max(0, action.timelineStart),
+              trackId: action.trackId,
+            };
+          }
+
+          // If we move a video clip, also move its associated extracted audio clip if it exists.
+          if (
+            movedClip &&
+            c.mediaItemId === movedClip.mediaItemId &&
+            c.id !== action.clipId
+          ) {
+            const track = state.projects
+              .find((p) => p.id === state.activeProjectId)
+              ?.tracks.find((t) => t.id === c.trackId);
+            if (track && track.type === 'audio') {
+              return {
                 ...c,
                 timelineStart: Math.max(0, action.timelineStart),
-                trackId: action.trackId,
-              }
-            : c
-        )
-      );
+              };
+            }
+          }
+
+          return c;
+        });
+      });
 
     case 'TRIM_CLIP':
-      return patchClips(state, (clips) =>
-        clips.map((c) =>
-          c.id === action.clipId
-            ? {
+      return patchClips(state, (clips) => {
+        const trimmedClip = clips.find((c) => c.id === action.clipId);
+
+        return clips.map((c) => {
+          if (c.id === action.clipId) {
+            return {
+              ...c,
+              trimStart: Math.max(0, action.trimStart),
+              trimEnd: Math.max(0, action.trimEnd),
+            };
+          }
+
+          // Try to sync trim operations for extracted audio clips too
+          if (
+            trimmedClip &&
+            c.mediaItemId === trimmedClip.mediaItemId &&
+            c.timelineStart === trimmedClip.timelineStart &&
+            c.id !== action.clipId
+          ) {
+            const track = state.projects
+              .find((p) => p.id === state.activeProjectId)
+              ?.tracks.find((t) => t.id === c.trackId);
+            if (track && track.type === 'audio') {
+              return {
                 ...c,
                 trimStart: Math.max(0, action.trimStart),
                 trimEnd: Math.max(0, action.trimEnd),
-              }
-            : c
-        )
-      );
+              };
+            }
+          }
+
+          return c;
+        });
+      });
 
     case 'SPLIT_CLIP': {
       const project = getProject(state);
@@ -345,7 +427,7 @@ function reducer(state: EditorState, action: EditorAction): EditorState {
       if (!media) return state;
 
       const elapsed = action.atTime - clip.timelineStart;
-      const splitSourceTime = clip.trimStart + elapsed * clip.speed;
+      const splitSourceTime = clip.trimStart + elapsed * (clip.speed ?? 1);
 
       // left clip ends right before the split time. The new trimEnd is simply everything
       // after the split time, which is exactly (media.duration - splitSourceTime)
@@ -361,11 +443,42 @@ function reducer(state: EditorState, action: EditorAction): EditorState {
         trimEnd: clip.trimEnd,
       };
 
+      let newClips = project.clips
+        .filter((c) => c.id !== action.clipId)
+        .concat([leftClip, rightClip]);
+
+      // Also split the extracted audio clip if this was a video clip
+      const associatedAudioClip = project.clips.find(
+        (c) =>
+          c.id !== action.clipId &&
+          c.mediaItemId === clip.mediaItemId &&
+          c.timelineStart === clip.timelineStart
+      );
+      if (associatedAudioClip) {
+        const track = project.tracks.find(
+          (t) => t.id === associatedAudioClip.trackId
+        );
+        if (track && track.type === 'audio') {
+          const leftAudioClip: Clip = {
+            ...associatedAudioClip,
+            trimEnd: media.duration - splitSourceTime,
+          };
+          const rightAudioClip: Clip = {
+            ...associatedAudioClip,
+            id: createId(),
+            timelineStart: action.atTime,
+            trimStart: splitSourceTime,
+            trimEnd: associatedAudioClip.trimEnd,
+          };
+          newClips = newClips
+            .filter((c) => c.id !== associatedAudioClip.id)
+            .concat([leftAudioClip, rightAudioClip]);
+        }
+      }
+
       return updateProject(state, {
         ...project,
-        clips: project.clips
-          .filter((c) => c.id !== action.clipId)
-          .concat([leftClip, rightClip]),
+        clips: newClips,
         updatedAt: Date.now(),
       });
     }
@@ -384,24 +497,32 @@ function reducer(state: EditorState, action: EditorAction): EditorState {
         )
       );
 
-    case 'SET_CLIP_PITCH':
-      return patchClips(state, (clips) =>
-        clips.map((c) =>
-          c.id === action.clipId ? { ...c, pitch: action.pitch } : c
-        )
-      );
-
-    case 'SET_CLIP_TONE':
-      return patchClips(state, (clips) =>
-        clips.map((c) =>
-          c.id === action.clipId ? { ...c, tone: action.tone } : c
-        )
-      );
-
     case 'DELETE_CLIP':
-      return patchClips(state, (clips) =>
-        clips.filter((c) => c.id !== action.clipId)
-      );
+      return patchClips(state, (clips) => {
+        const deletedClip = clips.find((c) => c.id === action.clipId);
+        let newClips = clips.filter((c) => c.id !== action.clipId);
+
+        // Also delete extracted audio if video was deleted
+        if (deletedClip) {
+          const track = state.projects
+            .find((p) => p.id === state.activeProjectId)
+            ?.tracks.find((t) => t.id === deletedClip.trackId);
+          if (track && track.type === 'video') {
+            newClips = newClips.filter(
+              (c) =>
+                !(
+                  c.mediaItemId === deletedClip.mediaItemId &&
+                  c.timelineStart === deletedClip.timelineStart &&
+                  c.trimStart === deletedClip.trimStart &&
+                  c.trimEnd === deletedClip.trimEnd &&
+                  c.id !== action.clipId
+                )
+            );
+          }
+        }
+
+        return newClips;
+      });
 
     case 'SET_PLAYHEAD':
       return { ...state, playhead: Math.max(0, action.time) };
@@ -438,20 +559,6 @@ function reducer(state: EditorState, action: EditorAction): EditorState {
       return patchClipsNoHistory(state, (clips) =>
         clips.map((c) =>
           c.id === action.clipId ? { ...c, speed: action.speed } : c
-        )
-      );
-
-    case 'SET_CLIP_PITCH_PREVIEW':
-      return patchClipsNoHistory(state, (clips) =>
-        clips.map((c) =>
-          c.id === action.clipId ? { ...c, pitch: action.pitch } : c
-        )
-      );
-
-    case 'SET_CLIP_TONE_PREVIEW':
-      return patchClipsNoHistory(state, (clips) =>
-        clips.map((c) =>
-          c.id === action.clipId ? { ...c, tone: action.tone } : c
         )
       );
 

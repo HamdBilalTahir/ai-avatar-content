@@ -6,6 +6,45 @@
 
 ---
 
+> ### Simplify Audio Controls — Volume Only (Remove Pitch & Tone)
+>
+> - **What changed:**
+>   - Removed `pitch` and `tone` fields from the `Clip` type entirely.
+>   - Removed the Pitch and Tone drag-bar controls from the clip settings popup. The popup now shows only **Tempo** and **Volume**.
+>   - Removed all Web Audio API code (AudioContext, MediaElementAudioSourceNode, BiquadFilterNode) from `AudioTrackPlayer` in Preview.tsx. Audio now plays through the HTML5 `<audio>` element directly with `audio.volume = clip.volume / 100`.
+>   - Volume range changed from `0–1` to `0–100`. The bar shows `{value}%` and double-clicking it resets to 100.
+>   - Export route updated: removed `audioProcessingFilters()` (pitch+tone EQ); volume filter now uses `clip.volume / 100`. Video stream is copied without re-encoding when speed == 1 (preserves quality). When re-encoding is required (speed != 1), uses CRF 18 + 192 kbps AAC for high quality output.
+>   - `atempo` filter is now skipped when speed == 1.0, and correctly chains two filters for sub-0.5 speeds (e.g., `atempo=0.5,atempo=0.5` for 0.25×).
+> - **Why:** Pitch and tone controls used Web Audio API routing that was unreliable across browsers and added latency in preview. Removing them makes audio playback simpler and more reliable. Volume-only is sufficient for the current use case.
+> - **Files:**
+>   - `src/app/video-maker/types.ts` — removed `pitch` and `tone` from `Clip`
+>   - `src/app/video-maker/store.tsx` — removed `SET_CLIP_PITCH`, `SET_CLIP_TONE`, `SET_CLIP_PITCH_PREVIEW`, `SET_CLIP_TONE_PREVIEW` actions and reducer cases
+>   - `src/app/video-maker/_components/Timeline.tsx` — clip default volume `1` → `100`, removed `pitch`/`tone` defaults
+>   - `src/app/video-maker/_components/ClipBlock.tsx` — removed Pitch/Tone bars and badges; Volume bar range 0–100; volume drag range updated; waveform/opacity scaled by `volume / 100`; double-click volume bar resets to 100
+>   - `src/app/video-maker/_components/Preview.tsx` — removed Web Audio graph entirely; simplified `AudioTrackPlayer` to direct `<audio>` element with `volume = clip.volume / 100`
+>   - `src/app/api/video-maker/export/route.ts` — removed pitch/tone from `ExportClip`; volume filter uses `clip.volume / 100`; video copied at speed==1; CRF 18 + 192k AAC when re-encoding; `atempoChain()` helper for safe atempo chaining
+
+---
+
+> ### Advanced Audio Processing Engine for Next.js
+>
+> - **What changed:** Implemented a new advanced audio processing engine using the Web Audio API. This features an AudioWorklet `PitchShiftProcessor` for granular pitch shifting without tempo alteration, and a `useAudioProcessor` hook managing Biquad filters for tone control (Nasal and Throaty formants).
+> - **Why:** To support high-fidelity, real-time voice manipulation (pitch and tone independent of speed) directly in the browser, overcoming the standard `playbackRate` limitations and meeting the strict latency and quality constraints.
+> - **Files:**
+>   - `public/audio-processor.js`
+>   - `src/hooks/useAudioProcessor.ts`
+
+---
+
+> ### Auto-Create Audio Track on Video Drop
+>
+> - **What changed:** When dropping a video clip onto the timeline, if no unmuted audio track exists, a new audio track is now automatically created to hold the extracted audio clip.
+> - **Why:** Previously, if a user dragged a video clip and there were no audio tracks (e.g., they deleted the default one), the audio portion was silently discarded. Now it safely creates a destination track for the extracted audio.
+> - **Files:**
+>   - `src/app/video-maker/store.tsx`
+
+---
+
 > ### Knob Popup Panel — Portal-Based, Pointer-Capture Drag, Undo/Redo
 >
 > - **What changed:**
