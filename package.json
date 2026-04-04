@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@cartesia/cartesia-js": "^3.0.0",
+    "@google/genai": "^1.48.0",
     "@google/generative-ai": "^0.24.1",
     "@gradio/client": "^2.1.0",
     "@langchain/core": "^1.1.32",

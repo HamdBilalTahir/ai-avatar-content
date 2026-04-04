@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { generateScript } from '@/services/gemini-script';
 
-const VALID_DURATIONS = ['15s', '30s', '45s', '60s'] as const;
+const VALID_DURATIONS = ['4s', '8s', '15s', '30s', '45s', '60s'] as const;
 type Duration = (typeof VALID_DURATIONS)[number];
 
 export async function POST(req: NextRequest) {

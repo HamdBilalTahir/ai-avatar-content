@@ -1,9 +1,11 @@
 import { ChatGoogleGenerativeAI } from '@langchain/google-genai';
 import { ChatPromptTemplate } from '@langchain/core/prompts';
 
-type Duration = '15s' | '30s' | '45s' | '60s';
+type Duration = '4s' | '8s' | '15s' | '30s' | '45s' | '60s';
 
 const WORD_RANGES: Record<Duration, string> = {
+  '4s': '8–12',
+  '8s': '16–24',
   '15s': '30–40',
   '30s': '60–75',
   '45s': '90–110',

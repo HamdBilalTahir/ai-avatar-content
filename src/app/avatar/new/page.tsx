@@ -68,6 +68,9 @@ export default function AvatarNewPage() {
   const [pipelineError, setPipelineError] = useState<string | null>(null);
   const [cyclingMessage, setCyclingMessage] = useState(CYCLING_MESSAGES[0]);
   const [imageVisible, setImageVisible] = useState(false);
+  const [imageAspectRatio, setImageAspectRatio] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [lightboxOpen, setLightboxOpen] = useState(false);
 
   const [selectedVoiceId, setSelectedVoiceId] = useState<string>(
     VOICE_PRESETS[0].id
@@ -130,7 +133,6 @@ export default function AvatarNewPage() {
         };
         setImageBase64(img.imageBase64);
         setMimeType(img.mimeType);
-        requestAnimationFrame(() => setImageVisible(true));
       }
     } catch {
       // Corrupt storage — ignore and start fresh
@@ -245,14 +247,14 @@ export default function AvatarNewPage() {
     const files = Array.from(e.target.files ?? []);
     if (!files.length) return;
     files.forEach((file) => {
-      if (referenceImages.length >= 3) return;
+      if (referenceImages.length >= 10) return;
       const reader = new FileReader();
       reader.onload = () => {
         const result = reader.result as string;
         const [meta, data] = result.split(',');
         const mimeType = meta.replace('data:', '').replace(';base64', '');
         setReferenceImages((prev) =>
-          prev.length >= 3 ? prev : [...prev, { data, mime_type: mimeType }]
+          prev.length >= 10 ? prev : [...prev, { data, mime_type: mimeType }]
         );
       };
       reader.readAsDataURL(file);
@@ -269,6 +271,7 @@ export default function AvatarNewPage() {
     setAvatarError(null);
     setImageBase64(null);
     setImageVisible(false);
+    setImageAspectRatio(null);
     setIsGeneratingAvatar(true);
 
     try {
@@ -296,7 +299,6 @@ export default function AvatarNewPage() {
       setImageBase64(data.image_base64);
       setMimeType(data.mime_type);
       setGenerationCount((c) => c + 1);
-      requestAnimationFrame(() => setImageVisible(true));
     } catch (err) {
       setAvatarError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -321,6 +323,32 @@ export default function AvatarNewPage() {
     img.src = `data:${mimeType};base64,${imageBase64}`;
   }
 
+  function handleCopy() {
+    if (!imageBase64 || !mimeType) return;
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+    fetch(`data:${mimeType};base64,${imageBase64}`)
+      .then((r) => r.blob())
+      .then(
+        (blob) =>
+          new Promise<Blob>((resolve) => {
+            const canvas = document.createElement('canvas');
+            const img = new Image();
+            img.onload = () => {
+              canvas.width = img.naturalWidth;
+              canvas.height = img.naturalHeight;
+              canvas.getContext('2d')!.drawImage(img, 0, 0);
+              canvas.toBlob((b) => resolve(b!), 'image/png');
+            };
+            img.src = URL.createObjectURL(blob);
+          })
+      )
+      .then((pngBlob) =>
+        navigator.clipboard.write([new ClipboardItem({ 'image/png': pngBlob })])
+      )
+      .catch(() => {});
+  }
+
   function handleImport(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -334,7 +362,6 @@ export default function AvatarNewPage() {
       setMimeType(mime);
       setGenerationCount((c) => c + 1);
       setAvatarError(null);
-      requestAnimationFrame(() => setImageVisible(true));
     };
     reader.readAsDataURL(file);
     // Reset so the same file can be re-imported
@@ -352,6 +379,7 @@ export default function AvatarNewPage() {
     setImageBase64(null);
     setMimeType(null);
     setImageVisible(false);
+    setImageAspectRatio(null);
     setGenerationCount(0);
     setReferenceImages([]);
     setNegativePrompt('');
@@ -549,10 +577,10 @@ export default function AvatarNewPage() {
                       Reference images
                     </span>
                     <span className="ml-1.5 text-xs text-slate-400">
-                      (optional · up to 3)
+                      (optional · up to 10)
                     </span>
                   </div>
-                  {referenceImages.length < 3 && (
+                  {referenceImages.length < 10 && (
                     <button
                       type="button"
                       onClick={() => refImageInputRef.current?.click()}
@@ -597,7 +625,7 @@ export default function AvatarNewPage() {
                         </button>
                       </div>
                     ))}
-                    {referenceImages.length < 3 && (
+                    {referenceImages.length < 10 && (
                       <button
                         type="button"
                         onClick={() => refImageInputRef.current?.click()}
@@ -1076,15 +1104,63 @@ export default function AvatarNewPage() {
             <div className="w-full max-w-sm">
               <div
                 className="relative w-full rounded-2xl overflow-hidden border border-slate-200 bg-white shadow-sm"
-                style={{ aspectRatio: '3/4' }}
+                style={{
+                  aspectRatio:
+                    imageBase64 && imageAspectRatio ? imageAspectRatio : '3/4',
+                }}
               >
                 {imageBase64 ? (
-                  <img
-                    src={`data:${mimeType};base64,${imageBase64}`}
-                    alt="Generated avatar"
-                    className="h-full w-full object-cover transition-opacity duration-700"
-                    style={{ opacity: imageVisible ? 1 : 0 }}
-                  />
+                  <>
+                    <img
+                      src={`data:${mimeType};base64,${imageBase64}`}
+                      alt="Generated avatar"
+                      className="w-full h-full object-contain transition-opacity duration-700 cursor-zoom-in"
+                      style={{ opacity: imageVisible ? 1 : 0 }}
+                      onClick={() => setLightboxOpen(true)}
+                      onLoad={(e) => {
+                        const img = e.currentTarget;
+                        setImageAspectRatio(
+                          `${img.naturalWidth} / ${img.naturalHeight}`
+                        );
+                        setImageVisible(true);
+                      }}
+                    />
+                    <button
+                      onClick={handleCopy}
+                      title="Copy image"
+                      className="absolute top-2 right-2 flex h-8 w-8 items-center justify-center rounded-lg bg-black/40 text-white backdrop-blur-sm transition hover:bg-black/60 active:scale-95"
+                    >
+                      {copied ? (
+                        <svg
+                          className="h-4 w-4 text-emerald-400"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth={2.5}
+                        >
+                          <path
+                            d="M5 13l4 4L19 7"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          />
+                        </svg>
+                      ) : (
+                        <svg
+                          className="h-4 w-4"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth={2}
+                        >
+                          <rect x="9" y="9" width="13" height="13" rx="2" />
+                          <path
+                            d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"
+                            strokeLinecap="round"
+                          />
+                        </svg>
+                      )}
+                    </button>
+                  </>
                 ) : (
                   <div className="flex h-full flex-col items-center justify-center gap-3">
                     <div className="rounded-full bg-slate-100 p-5">
@@ -1133,6 +1209,34 @@ export default function AvatarNewPage() {
           </div>
         </div>
       </div>
+
+      {lightboxOpen && imageBase64 && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm"
+          onClick={() => setLightboxOpen(false)}
+        >
+          <img
+            src={`data:${mimeType};base64,${imageBase64}`}
+            alt="Avatar enlarged"
+            className="max-h-[90vh] max-w-[90vw] rounded-2xl shadow-2xl object-contain"
+            onClick={(e) => e.stopPropagation()}
+          />
+          <button
+            onClick={() => setLightboxOpen(false)}
+            className="absolute top-4 right-4 flex h-9 w-9 items-center justify-center rounded-full bg-white/10 text-white backdrop-blur-sm transition hover:bg-white/20"
+          >
+            <svg
+              viewBox="0 0 24 24"
+              className="h-5 w-5"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={2}
+            >
+              <path d="M18 6 6 18M6 6l12 12" strokeLinecap="round" />
+            </svg>
+          </button>
+        </div>
+      )}
 
       <style>{`
         @keyframes fadeSlideIn {

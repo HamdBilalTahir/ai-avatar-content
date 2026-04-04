@@ -1,3 +1,82 @@
+## 🗓️ **2026-04-04**
+
+---
+
+### ✨ Features
+
+---
+
+> ### Video Script Editor — Generation and Layout Refinements
+>
+> - **What changed:**
+>   - **Generated Media Section**: Added a horizontally scrollable section at the bottom of the right sidebar to display generated videos alongside their shot names, including a Download button for each.
+>   - **Layout Fixes**: The right sidebar is now locked to the screen's height without global scrolling. The Image Library and Generated Media sections slide horizontally (`overflow-x-auto`), maximizing vertical efficiency.
+>   - **Shot Management & Persistence**: Users can now add new shots or delete existing ones. All shots, API Keys, and Model selections are persisted to `localStorage` and restored on load.
+>   - **UI Polish**: Checkbox selection no longer accidentally opens the accordion. Added an inline `+` button inside each shot's "Attached Images" area for quick uploads. Added a pulsating spinner/loader inside the shot's accordion header when generating.
+> - **Why:** A more intuitive layout allows users to quickly view generations without scrolling up and down the page. Storing settings locally enables a smoother, continuous workflow across sessions.
+> - **Files:**
+>   - `src/app/script/page.tsx`
+
+---
+
+> ### Video Script Editor Initial Route
+>
+> - **What changed:** Created a dedicated `/script` route for managing AI video script shots. Includes an accordion-based shot list with editable prompts, durations, and resolutions. Added a Generation Settings panel (with API Key and Model selection) and a persistent Image Library for attaching reference images to shots. Shots and settings are saved to `localStorage`.
+> - **Why:** Provides a dedicated workspace to prepare, adjust, and configure individual shots before sending them to the video generation model (e.g. Veo).
+> - **Files:**
+>   - `src/app/script/page.tsx`
+>   - `src/app/script/constants.ts`
+>   - `src/components/AppSidebar.tsx`
+
+---
+
+## 🗓️ **2026-03-30**
+
+---
+
+### 💅 UI Improvements
+
+---
+
+> ### Copy-to-Clipboard Button on Avatar Image
+>
+> - **What changed:** A frosted-glass icon button is now overlaid on the top-right corner of the avatar image. Clicking it copies the image as a PNG to the system clipboard using `navigator.clipboard.write()` with a `ClipboardItem`. The icon switches to a green checkmark for 2 seconds then reverts to the copy icon. The standalone Copy button that was previously in the button row below the image is removed.
+> - **Why:** Lets users copy the avatar directly into other apps (Figma, Notion, chat, etc.) without having to download and re-import.
+> - **Files:**
+>   - `src/app/avatar/new/page.tsx`
+
+---
+
+## 🗓️ **2026-03-28**
+
+---
+
+### ✨ Features
+
+---
+
+> ### Reference Image Upload Limit Raised to 10
+>
+> - **What changed:** Users can now upload up to 10 reference images (previously capped at 3). All guards, state setters, and UI labels updated consistently.
+> - **Why:** More reference images give Gemini better likeness signal, especially for subjects with varied angles, lighting, or expressions.
+> - **Files:**
+>   - `src/app/avatar/new/page.tsx`
+
+---
+
+### 💅 UI Improvements
+
+---
+
+> ### Avatar Image Container Adapts to Natural Image Dimensions
+>
+> - **What changed:** The avatar preview container no longer forces a fixed `3/4` portrait aspect ratio when an image is loaded. On `onLoad`, the container switches to the image's `naturalWidth / naturalHeight` ratio, and `object-cover` is replaced with `object-contain` so the full image is always visible without cropping. The placeholder state still uses the `3/4` ratio. Aspect ratio and visibility state are reset on each new generation.
+> - **Why:** Generated images can be square, landscape, or any other ratio. Forcing `3/4` was cropping wide images and leaving dead whitespace around square ones.
+> - **Files:**
+>   - `src/app/avatar/new/page.tsx`
+
+---
+
 ## 🗓️ **2026-03-25**
 
 ---
