@@ -564,8 +564,10 @@ export default function ScriptPage() {
                           }
                           return newShots;
                         });
-                      } catch (error: any) {
-                        if (error.name === 'AbortError') {
+                      } catch (error: unknown) {
+                        const isAbortError =
+                          error instanceof Error && error.name === 'AbortError';
+                        if (isAbortError) {
                           // handled by the stop button
                           return;
                         }

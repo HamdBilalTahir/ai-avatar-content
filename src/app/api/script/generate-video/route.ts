@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { generateReel } from '@/services/gemini-video';
 import path from 'path';
+import fs from 'fs';
 
 export async function POST(req: NextRequest) {
   try {
@@ -35,7 +36,6 @@ export async function POST(req: NextRequest) {
     // If file exists, append (1), (2), etc.
     if (shotNumber) {
       let counter = 1;
-      const fs = require('fs');
       while (fs.existsSync(outputPath)) {
         outputFilename = `shot_${shotNumber} (${counter}).mp4`;
         outputPath = path.join(
@@ -67,8 +67,9 @@ export async function POST(req: NextRequest) {
         { status: 500 }
       );
     }
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Video generation API error:', error);
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    return NextResponse.json({ error: errorMessage }, { status: 500 });
   }
 }
