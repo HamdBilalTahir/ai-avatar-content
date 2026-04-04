@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
+import NextImage from 'next/image';
 import type {
   AvatarGenerateResponse,
   PipelineCreateRequest,
@@ -731,10 +732,12 @@ export default function AvatarNewPage() {
                         key={i}
                         className="relative group h-16 w-16 rounded-lg overflow-hidden border border-slate-200 bg-slate-100 flex-shrink-0"
                       >
-                        <img
+                        <NextImage
                           src={`data:${img.mime_type};base64,${img.data}`}
                           alt={`Reference ${i + 1}`}
-                          className="h-full w-full object-cover"
+                          fill
+                          unoptimized
+                          className="object-cover"
                         />
                         <button
                           type="button"
@@ -867,14 +870,16 @@ export default function AvatarNewPage() {
               >
                 {imageBase64 ? (
                   <>
-                    <img
+                    <NextImage
                       src={`data:${mimeType};base64,${imageBase64}`}
                       alt="Generated avatar"
-                      className="w-full h-full object-contain transition-opacity duration-700 cursor-zoom-in"
+                      fill
+                      unoptimized
+                      className="object-contain transition-opacity duration-700 cursor-zoom-in"
                       style={{ opacity: imageVisible ? 1 : 0 }}
                       onClick={() => setLightboxOpen(true)}
                       onLoad={(e) => {
-                        const img = e.currentTarget;
+                        const img = e.currentTarget as HTMLImageElement;
                         setImageAspectRatio(
                           `${img.naturalWidth} / ${img.naturalHeight}`
                         );
@@ -1368,9 +1373,12 @@ export default function AvatarNewPage() {
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm"
           onClick={() => setLightboxOpen(false)}
         >
-          <img
+          <NextImage
             src={`data:${mimeType};base64,${imageBase64}`}
             alt="Avatar enlarged"
+            width={1200}
+            height={1200}
+            unoptimized
             className="max-h-[90vh] max-w-[90vw] rounded-2xl shadow-2xl object-contain"
             onClick={(e) => e.stopPropagation()}
           />
