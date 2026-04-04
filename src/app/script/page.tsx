@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useRef } from 'react';
+import Image from 'next/image';
 import * as initialData from './constants';
 
 type Shot = {
@@ -367,10 +368,12 @@ export default function ScriptPage() {
                                 className="relative group w-16 h-16 rounded-lg border border-slate-200 overflow-hidden bg-white shadow-sm"
                               >
                                 {img ? (
-                                  <img
+                                  <Image
                                     src={img.previewUrl}
                                     alt="ref"
-                                    className="w-full h-full object-cover"
+                                    fill
+                                    unoptimized
+                                    className="object-cover"
                                   />
                                 ) : (
                                   <div className="w-full h-full flex items-center justify-center text-xs text-slate-400">
@@ -661,10 +664,12 @@ export default function ScriptPage() {
                     }
                   }}
                 >
-                  <img
+                  <Image
                     src={img.previewUrl}
                     alt="Library Item"
-                    className="w-full h-full object-cover"
+                    fill
+                    unoptimized
+                    className="object-cover"
                   />
                   <div className="absolute inset-0 bg-slate-900/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-xs font-semibold text-white text-center p-1">
                     Attach to Shot
