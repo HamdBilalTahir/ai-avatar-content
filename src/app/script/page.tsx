@@ -11,7 +11,8 @@ type Shot = {
   prompt: string;
   selected?: boolean;
   status?: 'idle' | 'generating' | 'completed' | 'error';
-  generatedVideoUrl?: string;
+  generatedVideoUrl?: string; // keeping for backwards compatibility
+  generatedVideoUrls?: string[];
 };
 
 type ImageItem = {
@@ -29,6 +30,9 @@ export default function ScriptPage() {
   const [model, setModel] = useState('veo-3.1-fast-generate-preview');
   const [isGenerating, setIsGenerating] = useState(false);
   const [playingVideoUrl, setPlayingVideoUrl] = useState<string | null>(null);
+  const [abortController, setAbortController] =
+    useState<AbortController | null>(null);
+  const [recentSuccessUrls, setRecentSuccessUrls] = useState<string[]>([]);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -46,26 +50,78 @@ export default function ScriptPage() {
 
         // Check for existing generated videos in the background
         resetShots.forEach(async (shot: Shot, index: number) => {
-          const videoUrl = `/generated/shot_${shot.shot_number}.mp4`;
-          try {
-            const res = await fetch(videoUrl, { method: 'HEAD' });
-            if (res.ok) {
+          let urls: string[] = [];
+
+          // Helper to sequentially check for files
+          const checkFiles = async () => {
+            // Check base file
+            const baseUrl = `/generated/shot_${shot.shot_number}.mp4`;
+            try {
+              const res = await fetch(baseUrl, { method: 'HEAD' });
+              if (res.ok) {
+                urls.push(baseUrl);
+              }
+            } catch {
+              // file doesn't exist
+            }
+
+            // Check numbered files
+            let counter = 1;
+            while (true) {
+              // Try with space first (new format), then fallback to no space (old format)
+              const newFormatUrl = `/generated/shot_${shot.shot_number} (${counter}).mp4`;
+              const oldFormatUrl = `/generated/shot_${shot.shot_number}(${counter}).mp4`;
+
+              try {
+                let found = false;
+
+                let res = await fetch(newFormatUrl, { method: 'HEAD' });
+                if (res.ok) {
+                  urls.push(newFormatUrl);
+                  found = true;
+                } else {
+                  res = await fetch(oldFormatUrl, { method: 'HEAD' });
+                  if (res.ok) {
+                    urls.push(oldFormatUrl);
+                    found = true;
+                  }
+                }
+
+                if (found) {
+                  counter++;
+                } else {
+                  break;
+                }
+              } catch {
+                break;
+              }
+            }
+
+            if (urls.length > 0) {
               setShots((prev) => {
                 const newShots = [...prev];
-                // Only update if it hasn't started generating again
+                // Update urls list, merge with existing if any to avoid duplicates
+                const existingUrls = newShots[index].generatedVideoUrls || [];
+                const mergedUrls = Array.from(
+                  new Set([...existingUrls, ...urls])
+                );
+
+                newShots[index] = {
+                  ...newShots[index],
+                  generatedVideoUrls: mergedUrls,
+                  generatedVideoUrl: mergedUrls[mergedUrls.length - 1], // use latest
+                };
+
+                // Only update status to completed if it hasn't started generating again
                 if (newShots[index].status !== 'generating') {
-                  newShots[index] = {
-                    ...newShots[index],
-                    status: 'completed',
-                    generatedVideoUrl: videoUrl,
-                  };
+                  newShots[index].status = 'completed';
                 }
                 return newShots;
               });
             }
-          } catch {
-            // Ignore errors, file might not exist
-          }
+          };
+
+          checkFiles();
         });
       } catch {
         setShots(
@@ -156,17 +212,19 @@ export default function ScriptPage() {
   };
 
   return (
-    <div className="flex h-screen bg-neutral-950 text-neutral-200 overflow-hidden font-sans">
+    <div className="flex h-screen bg-slate-50 text-slate-900 overflow-hidden font-sans">
       {/* Left Pane: Shots Accordion */}
-      <div className="w-2/3 h-full overflow-y-auto border-r border-neutral-800 p-6">
+      <div className="w-2/3 h-full overflow-y-auto border-r border-slate-200 p-6">
         <div className="flex items-center justify-between mb-6">
-          <h1 className="text-2xl font-bold text-white">Video Script Editor</h1>
+          <h1 className="text-2xl font-bold text-slate-900">
+            Video Script Editor
+          </h1>
           <button
             onClick={() => {
               const allSelected = shots.every((s) => s.selected);
               setShots(shots.map((s) => ({ ...s, selected: !allSelected })));
             }}
-            className="text-sm text-neutral-400 hover:text-white"
+            className="text-sm text-slate-500 hover:text-slate-900 font-medium"
           >
             {shots.every((s) => s.selected) ? 'Deselect All' : 'Select All'}
           </button>
@@ -174,7 +232,7 @@ export default function ScriptPage() {
 
         <div className="space-y-4">
           {!isLoaded ? (
-            <div className="text-neutral-500">Loading...</div>
+            <div className="text-slate-500">Loading...</div>
           ) : (
             shots.map((shot, index) => {
               const isExpanded = expandedShotIndex === index;
@@ -182,13 +240,15 @@ export default function ScriptPage() {
               return (
                 <div
                   key={index}
-                  className={`bg-neutral-900 border rounded-lg overflow-hidden ${
-                    shot.selected ? 'border-violet-500' : 'border-neutral-800'
+                  className={`bg-white border rounded-xl overflow-hidden shadow-sm transition-all ${
+                    shot.selected
+                      ? 'border-violet-400 ring-1 ring-violet-400'
+                      : 'border-slate-200 hover:border-slate-300'
                   }`}
                 >
                   {/* Accordion Header */}
                   <div
-                    className="px-4 py-3 flex items-center gap-4 cursor-pointer hover:bg-neutral-800 transition-colors"
+                    className="px-4 py-3 flex items-center gap-4 cursor-pointer hover:bg-slate-50 transition-colors"
                     onClick={() =>
                       setExpandedShotIndex(isExpanded ? null : index)
                     }
@@ -200,26 +260,26 @@ export default function ScriptPage() {
                       onChange={(e) => {
                         updateShot(index, { selected: e.target.checked });
                       }}
-                      className="w-4 h-4 rounded bg-neutral-800 border-neutral-700 text-violet-600 focus:ring-violet-500"
+                      className="w-4 h-4 rounded border-slate-300 text-violet-600 focus:ring-violet-500"
                     />
-                    <div className="font-semibold flex-1 flex items-center gap-3">
+                    <div className="font-semibold text-slate-800 flex-1 flex items-center gap-3">
                       Shot {shot.shot_number}{' '}
-                      <span className="text-neutral-500 font-normal">
+                      <span className="text-slate-400 font-normal">
                         ({shot.duration}s, {shot.resolution})
                       </span>
                       {shot.status === 'generating' && (
-                        <span className="flex items-center gap-2 px-2 py-1 bg-violet-500/10 text-violet-400 text-xs rounded-full">
-                          <div className="w-3 h-3 border-2 border-violet-500 border-t-transparent rounded-full animate-spin"></div>
+                        <span className="flex items-center gap-2 px-2.5 py-1 bg-violet-100 text-violet-700 font-medium text-[10px] uppercase tracking-wider rounded-full">
+                          <div className="w-3 h-3 border-2 border-violet-600 border-t-transparent rounded-full animate-spin"></div>
                           Generating...
                         </span>
                       )}
                       {shot.status === 'completed' && (
-                        <span className="px-2 py-0.5 bg-green-500/20 text-green-500 text-xs rounded-full">
+                        <span className="px-2.5 py-1 bg-emerald-100 text-emerald-700 font-medium text-[10px] uppercase tracking-wider rounded-full">
                           Done
                         </span>
                       )}
                       {shot.status === 'error' && (
-                        <span className="px-2 py-0.5 bg-red-500/20 text-red-500 text-xs rounded-full">
+                        <span className="px-2.5 py-1 bg-red-100 text-red-700 font-medium text-[10px] uppercase tracking-wider rounded-full">
                           Error
                         </span>
                       )}
@@ -236,12 +296,12 @@ export default function ScriptPage() {
                             removeShot(index);
                           }
                         }}
-                        className="text-neutral-500 hover:text-red-500 px-2 py-1"
+                        className="text-slate-400 hover:text-red-500 px-2 py-1 transition-colors"
                         title="Delete shot"
                       >
                         Delete
                       </button>
-                      <div className="text-neutral-400">
+                      <div className="text-slate-400">
                         {isExpanded ? '▼' : '▶'}
                       </div>
                     </div>
@@ -249,10 +309,10 @@ export default function ScriptPage() {
 
                   {/* Accordion Content */}
                   {isExpanded && (
-                    <div className="p-4 border-t border-neutral-800 space-y-4 bg-neutral-950/50">
+                    <div className="p-4 border-t border-slate-100 space-y-4 bg-slate-50/50">
                       <div className="flex gap-4 mb-4">
                         <div className="flex-1">
-                          <label className="block text-xs text-neutral-500 mb-1 uppercase tracking-wider">
+                          <label className="block text-[10px] font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">
                             Duration (s)
                           </label>
                           <input
@@ -263,11 +323,11 @@ export default function ScriptPage() {
                                 duration: parseInt(e.target.value) || 0,
                               })
                             }
-                            className="w-full bg-neutral-800 border border-neutral-700 rounded px-3 py-1.5 text-sm text-white focus:outline-none focus:border-blue-500"
+                            className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-900 shadow-sm focus:outline-none focus:border-violet-500 focus:ring-1 focus:ring-violet-500"
                           />
                         </div>
                         <div className="flex-1">
-                          <label className="block text-xs text-neutral-500 mb-1 uppercase tracking-wider">
+                          <label className="block text-[10px] font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">
                             Resolution
                           </label>
                           <input
@@ -276,13 +336,13 @@ export default function ScriptPage() {
                             onChange={(e) =>
                               updateShot(index, { resolution: e.target.value })
                             }
-                            className="w-full bg-neutral-800 border border-neutral-700 rounded px-3 py-1.5 text-sm text-white focus:outline-none focus:border-blue-500"
+                            className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-900 shadow-sm focus:outline-none focus:border-violet-500 focus:ring-1 focus:ring-violet-500"
                           />
                         </div>
                       </div>
 
                       <div>
-                        <label className="block text-xs text-neutral-500 mb-1 uppercase tracking-wider">
+                        <label className="block text-[10px] font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">
                           Prompt
                         </label>
                         <textarea
@@ -290,12 +350,12 @@ export default function ScriptPage() {
                           onChange={(e) =>
                             updateShot(index, { prompt: e.target.value })
                           }
-                          className="w-full h-80 bg-neutral-800 border border-neutral-700 rounded p-3 text-sm font-mono text-neutral-300 focus:outline-none focus:border-blue-500"
+                          className="w-full h-80 bg-white border border-slate-200 rounded-lg p-3 text-sm text-slate-700 shadow-sm focus:outline-none focus:border-violet-500 focus:ring-1 focus:ring-violet-500"
                         />
                       </div>
 
                       <div>
-                        <label className="block text-xs text-neutral-500 mb-2 uppercase tracking-wider">
+                        <label className="block text-[10px] font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">
                           Attached Images
                         </label>
                         <div className="flex flex-wrap gap-2">
@@ -304,7 +364,7 @@ export default function ScriptPage() {
                             return (
                               <div
                                 key={i}
-                                className="relative group w-16 h-16 rounded border border-neutral-700 overflow-hidden bg-neutral-800"
+                                className="relative group w-16 h-16 rounded-lg border border-slate-200 overflow-hidden bg-white shadow-sm"
                               >
                                 {img ? (
                                   <img
@@ -313,7 +373,7 @@ export default function ScriptPage() {
                                     className="w-full h-full object-cover"
                                   />
                                 ) : (
-                                  <div className="w-full h-full flex items-center justify-center text-xs text-neutral-500">
+                                  <div className="w-full h-full flex items-center justify-center text-xs text-slate-400">
                                     Ref {refId}
                                   </div>
                                 )}
@@ -331,7 +391,7 @@ export default function ScriptPage() {
                             );
                           })}
 
-                          <label className="w-16 h-16 flex flex-col items-center justify-center rounded border border-dashed border-neutral-600 cursor-pointer hover:border-neutral-400 hover:bg-neutral-800 transition-colors text-neutral-500 hover:text-white">
+                          <label className="w-16 h-16 flex flex-col items-center justify-center rounded-lg border-2 border-dashed border-slate-200 cursor-pointer hover:border-violet-400 hover:bg-violet-50 transition-colors text-slate-400 hover:text-violet-600 bg-white">
                             <span className="text-xl leading-none">+</span>
                             <input
                               type="file"
@@ -363,7 +423,7 @@ export default function ScriptPage() {
                             />
                           </label>
                         </div>
-                        <div className="mt-2 text-xs text-neutral-500">
+                        <div className="mt-2 text-[11px] text-slate-400">
                           Click the + button to upload and attach directly, or
                           click an image in the library.
                         </div>
@@ -378,7 +438,7 @@ export default function ScriptPage() {
           {isLoaded && (
             <button
               onClick={addShot}
-              className="w-full py-4 border-2 border-dashed border-neutral-700 rounded-lg text-neutral-400 hover:text-white hover:border-neutral-500 hover:bg-neutral-800 transition-all flex items-center justify-center gap-2"
+              className="w-full py-4 border-2 border-dashed border-slate-300 rounded-xl text-slate-500 hover:text-violet-700 hover:border-violet-300 hover:bg-violet-50 transition-all flex items-center justify-center gap-2 font-medium"
             >
               <span className="text-lg">+</span> Add New Shot
             </button>
@@ -387,16 +447,16 @@ export default function ScriptPage() {
       </div>
 
       {/* Right Pane: Settings & Library */}
-      <div className="w-1/3 h-full bg-neutral-900 border-l border-neutral-800 flex flex-col overflow-hidden">
+      <div className="w-1/3 h-full bg-white border-l border-slate-200 flex flex-col overflow-hidden shadow-sm z-10">
         {/* Generation Settings */}
-        <div className="p-6 border-b border-neutral-800 bg-neutral-950/50 flex-shrink-0">
-          <h2 className="text-xl font-bold text-white mb-4">
+        <div className="p-6 border-b border-slate-100 bg-slate-50/50 flex-shrink-0">
+          <h2 className="text-lg font-bold text-slate-800 mb-4">
             Generation Settings
           </h2>
 
           <div className="space-y-4">
             <div>
-              <label className="block text-xs text-neutral-500 mb-1 uppercase tracking-wider">
+              <label className="block text-[10px] font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">
                 Veo API Key
               </label>
               <input
@@ -404,18 +464,18 @@ export default function ScriptPage() {
                 value={apiKey}
                 onChange={(e) => setApiKey(e.target.value)}
                 placeholder="AI Studio API Key"
-                className="w-full bg-neutral-800 border border-neutral-700 rounded px-3 py-2 text-sm text-white focus:outline-none focus:border-violet-500"
+                className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-900 shadow-sm focus:outline-none focus:border-violet-500 focus:ring-1 focus:ring-violet-500"
               />
             </div>
 
             <div>
-              <label className="block text-xs text-neutral-500 mb-1 uppercase tracking-wider">
+              <label className="block text-[10px] font-semibold text-slate-500 mb-1.5 uppercase tracking-wider">
                 Model
               </label>
               <select
                 value={model}
                 onChange={(e) => setModel(e.target.value)}
-                className="w-full bg-neutral-800 border border-neutral-700 rounded px-3 py-2 text-sm text-white focus:outline-none focus:border-violet-500"
+                className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-900 shadow-sm focus:outline-none focus:border-violet-500 focus:ring-1 focus:ring-violet-500"
               >
                 <option value="veo-3.1-fast-generate-preview">
                   Veo 3.1 Fast
@@ -424,101 +484,145 @@ export default function ScriptPage() {
               </select>
             </div>
 
-            <button
-              disabled={isGenerating || !shots.some((s) => s.selected)}
-              onClick={async () => {
-                const selectedIndices = shots
-                  .map((s, i) => (s.selected ? i : -1))
-                  .filter((i) => i !== -1);
+            <div className="flex gap-2">
+              <button
+                disabled={isGenerating || !shots.some((s) => s.selected)}
+                onClick={async () => {
+                  const selectedIndices = shots
+                    .map((s, i) => (s.selected ? i : -1))
+                    .filter((i) => i !== -1);
 
-                if (selectedIndices.length === 0)
-                  return alert('Select at least one shot.');
-                if (!apiKey) return alert('Please enter your API key.');
+                  if (selectedIndices.length === 0)
+                    return alert('Select at least one shot.');
+                  if (!apiKey) return alert('Please enter your API key.');
 
-                setIsGenerating(true);
+                  setIsGenerating(true);
+                  const controller = new AbortController();
+                  setAbortController(controller);
 
-                const newShots = [...shots];
-                selectedIndices.forEach((i) => {
-                  newShots[i].status = 'generating';
-                });
-                setShots(newShots);
+                  const newShots = [...shots];
+                  selectedIndices.forEach((i) => {
+                    newShots[i].status = 'generating';
+                  });
+                  setShots(newShots);
 
-                // Call actual API
-                Promise.all(
-                  selectedIndices.map(async (i) => {
-                    const shot = shots[i];
-                    try {
-                      // Get the image file if there are image references attached
-                      // The current implementation is simple and expects a file upload on the server.
-                      // For now, we will send the prompt and config to the API.
-                      const res = await fetch('/api/script/generate-video', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                          prompt: shot.prompt,
-                          modelName: model,
-                          duration: shot.duration,
-                          resolution: shot.resolution,
-                          apiKey: apiKey,
-                          shotNumber: shot.shot_number,
-                          // TODO: Handle image uploads separately if needed
-                        }),
-                      });
+                  // Call actual API
+                  Promise.all(
+                    selectedIndices.map(async (i) => {
+                      const shot = shots[i];
+                      try {
+                        const res = await fetch('/api/script/generate-video', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          signal: controller.signal,
+                          body: JSON.stringify({
+                            prompt: shot.prompt,
+                            modelName: model,
+                            duration: shot.duration,
+                            resolution: shot.resolution,
+                            apiKey: apiKey,
+                            shotNumber: shot.shot_number,
+                          }),
+                        });
 
-                      const data = await res.json();
+                        const data = await res.json();
 
-                      setShots((prev) => {
-                        const newShots = [...prev];
-                        if (res.ok && data.videoUrl) {
-                          newShots[i] = {
-                            ...newShots[i],
-                            status: 'completed',
-                            generatedVideoUrl: data.videoUrl,
-                          };
-                        } else {
+                        setShots((prev) => {
+                          const newShots = [...prev];
+                          if (res.ok && data.videoUrl) {
+                            const existingUrls =
+                              newShots[i].generatedVideoUrls || [];
+                            const mergedUrls = Array.from(
+                              new Set([...existingUrls, data.videoUrl])
+                            );
+                            newShots[i] = {
+                              ...newShots[i],
+                              status: 'completed',
+                              generatedVideoUrl: data.videoUrl,
+                              generatedVideoUrls: mergedUrls,
+                            };
+
+                            // Trigger hover animation for 3 seconds
+                            setRecentSuccessUrls((prev) => [
+                              ...prev,
+                              data.videoUrl,
+                            ]);
+                            setTimeout(() => {
+                              setRecentSuccessUrls((prev) =>
+                                prev.filter((u) => u !== data.videoUrl)
+                              );
+                            }, 3000);
+                          } else {
+                            newShots[i] = {
+                              ...newShots[i],
+                              status: 'error',
+                            };
+                            console.error(
+                              'Failed to generate video:',
+                              data.error
+                            );
+                          }
+                          return newShots;
+                        });
+                      } catch (error: any) {
+                        if (error.name === 'AbortError') {
+                          // handled by the stop button
+                          return;
+                        }
+                        setShots((prev) => {
+                          const newShots = [...prev];
                           newShots[i] = {
                             ...newShots[i],
                             status: 'error',
                           };
-                          console.error(
-                            'Failed to generate video:',
-                            data.error
-                          );
-                        }
-                        return newShots;
-                      });
-                    } catch (error) {
-                      setShots((prev) => {
-                        const newShots = [...prev];
-                        newShots[i] = {
-                          ...newShots[i],
-                          status: 'error',
-                        };
-                        return newShots;
-                      });
-                      console.error('Error generating video:', error);
+                          return newShots;
+                        });
+                        console.error('Error generating video:', error);
+                      }
+                    })
+                  ).finally(() => {
+                    setIsGenerating(false);
+                    setAbortController(null);
+                  });
+                }}
+                className="flex-1 py-3 bg-violet-600 hover:bg-violet-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold rounded-lg transition-colors"
+              >
+                {isGenerating
+                  ? 'Generating...'
+                  : `Generate Selected Shots (${shots.filter((s) => s.selected).length})`}
+              </button>
+
+              {isGenerating && (
+                <button
+                  onClick={() => {
+                    if (abortController) {
+                      abortController.abort();
+                      setAbortController(null);
                     }
-                  })
-                ).finally(() => {
-                  setIsGenerating(false);
-                });
-              }}
-              className="w-full py-3 bg-violet-600 hover:bg-violet-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold rounded-lg transition-colors"
-            >
-              {isGenerating
-                ? 'Generating...'
-                : `Generate Selected Shots (${shots.filter((s) => s.selected).length})`}
-            </button>
+                    setShots((prev) =>
+                      prev.map((s) =>
+                        s.status === 'generating' ? { ...s, status: 'idle' } : s
+                      )
+                    );
+                    setIsGenerating(false);
+                  }}
+                  className="px-4 py-3 bg-red-600 hover:bg-red-700 text-white font-semibold rounded-lg transition-colors"
+                  title="Stop Generation"
+                >
+                  Stop
+                </button>
+              )}
+            </div>
           </div>
         </div>
 
         {/* Image Library (Slideable horizontally) */}
-        <div className="p-6 border-b border-neutral-800 flex-shrink-0">
+        <div className="p-6 border-b border-slate-100 flex-shrink-0">
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-xl font-bold text-white">Image Library</h2>
+            <h2 className="text-lg font-bold text-slate-800">Image Library</h2>
             <button
               onClick={() => fileInputRef.current?.click()}
-              className="text-sm px-3 py-1 bg-neutral-800 hover:bg-neutral-700 text-white rounded transition-colors"
+              className="text-sm px-3 py-1 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-lg transition-colors font-medium shadow-sm"
             >
               + Upload
             </button>
@@ -533,15 +637,15 @@ export default function ScriptPage() {
           </div>
 
           {images.length === 0 ? (
-            <div className="text-center text-neutral-500 text-sm py-4 border border-dashed border-neutral-700 rounded-lg">
+            <div className="text-center text-slate-500 text-sm py-4 border border-dashed border-slate-300 rounded-lg bg-slate-50">
               No images uploaded yet.
             </div>
           ) : (
-            <div className="flex gap-4 overflow-x-auto pb-2 snap-x">
+            <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-5 gap-4 overflow-y-auto max-h-64 pr-2">
               {images.map((img) => (
                 <div
                   key={img.id}
-                  className="relative group w-24 h-24 flex-shrink-0 snap-start rounded-lg border border-neutral-700 overflow-hidden cursor-pointer hover:border-blue-500 transition-colors"
+                  className="relative group aspect-square rounded-lg border border-slate-200 overflow-hidden cursor-pointer hover:border-violet-400 hover:ring-1 hover:ring-violet-400 transition-all shadow-sm"
                   onClick={() => {
                     if (expandedShotIndex !== null) {
                       const shot = shots[expandedShotIndex];
@@ -560,7 +664,7 @@ export default function ScriptPage() {
                     alt="Library Item"
                     className="w-full h-full object-cover"
                   />
-                  <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-xs font-semibold text-white text-center p-1">
+                  <div className="absolute inset-0 bg-slate-900/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-xs font-semibold text-white text-center p-1">
                     Attach to Shot
                   </div>
                 </div>
@@ -569,74 +673,106 @@ export default function ScriptPage() {
           )}
         </div>
 
-        {/* Generated Media (Moved down and slideable horizontally) */}
+        {/* Generated Media (Stacked in a grid) */}
         <div className="p-6 flex-1 min-h-0 flex flex-col">
-          <h2 className="text-xl font-bold text-white mb-4 flex-shrink-0">
+          <h2 className="text-lg font-bold text-slate-800 mb-4 flex-shrink-0">
             Generated Media
           </h2>
 
-          <div className="flex gap-4 overflow-x-auto pb-2 snap-x h-full items-start">
-            {shots.filter(
-              (s) => s.status === 'completed' && s.generatedVideoUrl
-            ).length === 0 &&
+          <div className="grid grid-cols-2 gap-4 overflow-y-auto h-full content-start pr-2">
+            {shots.filter((s) => s.generatedVideoUrls?.length).length === 0 &&
             shots.filter((s) => s.status === 'generating').length === 0 ? (
-              <div className="w-full text-center text-neutral-500 text-sm mt-4">
+              <div className="col-span-full text-center text-slate-500 text-sm mt-4 p-6 border border-dashed border-slate-300 rounded-lg bg-slate-50">
                 No generated videos yet. Select shots to generate.
               </div>
             ) : (
               <>
-                {shots
-                  .filter(
-                    (s) => s.status === 'completed' && s.generatedVideoUrl
-                  )
-                  .map((shot) => (
-                    <div
-                      key={`vid-${shot.shot_number}`}
-                      className="bg-neutral-800 rounded-lg p-3 border border-neutral-700 w-64 flex-shrink-0 snap-start"
-                    >
-                      <div className="text-sm font-semibold text-white mb-2 flex items-center justify-between">
-                        <span>Shot {shot.shot_number}</span>
-                        <a
-                          href={shot.generatedVideoUrl}
-                          download={`Shot_${shot.shot_number}.mp4`}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="text-xs text-violet-400 hover:text-violet-300"
-                        >
-                          Download
-                        </a>
-                      </div>
+                {shots.flatMap((shot) => {
+                  const urls = shot.generatedVideoUrls || [];
+                  if (
+                    urls.length === 0 &&
+                    shot.generatedVideoUrl &&
+                    shot.status === 'completed'
+                  ) {
+                    urls.push(shot.generatedVideoUrl);
+                  }
+                  return urls.map((url, i) => {
+                    const versionLabel = urls.length > 1 ? ` (v${i + 1})` : '';
+                    const isRecent = recentSuccessUrls.includes(url);
+
+                    return (
                       <div
-                        className="relative w-full rounded bg-black aspect-video cursor-pointer overflow-hidden group"
-                        onClick={() =>
-                          setPlayingVideoUrl(shot.generatedVideoUrl!)
-                        }
+                        key={`vid-${shot.shot_number}-${i}`}
+                        className={`bg-white rounded-xl p-3 border w-full flex flex-col transition-all duration-500 ${
+                          isRecent
+                            ? 'border-violet-500 ring-2 ring-violet-500 shadow-md ring-opacity-50'
+                            : 'border-slate-200 shadow-sm'
+                        }`}
                       >
-                        <video
-                          src={shot.generatedVideoUrl}
-                          className="w-full h-full object-contain pointer-events-none"
-                        />
-                        <div className="absolute inset-0 bg-black/20 group-hover:bg-black/40 transition-colors flex items-center justify-center">
-                          <div className="w-12 h-12 bg-white/20 backdrop-blur rounded-full flex items-center justify-center text-white pl-1">
-                            ▶
+                        <div className="text-sm font-semibold text-slate-800 mb-2 flex items-center justify-between px-1">
+                          <span>
+                            Shot {shot.shot_number}
+                            {versionLabel}
+                          </span>
+                          <a
+                            href={url}
+                            download={`Shot_${shot.shot_number}${versionLabel}.mp4`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-xs text-violet-600 hover:text-violet-700 font-medium"
+                          >
+                            Download
+                          </a>
+                        </div>
+                        <div
+                          className="relative w-full rounded-lg bg-slate-900 aspect-video cursor-pointer overflow-hidden group"
+                          onClick={() => setPlayingVideoUrl(url)}
+                        >
+                          <video
+                            src={url}
+                            className="w-full h-full object-contain pointer-events-none"
+                          />
+                          <div
+                            className={`absolute inset-0 transition-colors flex items-center justify-center ${
+                              isRecent
+                                ? 'bg-slate-900/30'
+                                : 'bg-slate-900/10 group-hover:bg-slate-900/30'
+                            }`}
+                          >
+                            <div
+                              className={`w-10 h-10 bg-white/90 backdrop-blur rounded-full flex items-center justify-center text-slate-900 pl-1 shadow-md transition-transform ${
+                                isRecent
+                                  ? 'scale-110'
+                                  : 'transform group-hover:scale-110'
+                              }`}
+                            >
+                              ▶
+                            </div>
                           </div>
                         </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  });
+                })}
                 {shots
                   .filter((s) => s.status === 'generating')
-                  .map((shot) => (
-                    <div
-                      key={`vid-gen-${shot.shot_number}`}
-                      className="bg-neutral-800/50 rounded-lg p-4 border border-neutral-700 border-dashed w-48 flex-shrink-0 snap-start flex flex-col items-center justify-center text-neutral-400 h-32"
-                    >
-                      <div className="w-6 h-6 border-2 border-violet-500 border-t-transparent rounded-full animate-spin mb-3"></div>
-                      <span className="text-xs text-center">
-                        Generating Shot {shot.shot_number}...
-                      </span>
-                    </div>
-                  ))}
+                  .map((shot) => {
+                    const nextVersion = shot.generatedVideoUrls?.length
+                      ? ` (v${shot.generatedVideoUrls.length + 1})`
+                      : '';
+                    return (
+                      <div
+                        key={`vid-gen-${shot.shot_number}`}
+                        className="bg-slate-50 rounded-xl p-4 border border-slate-200 border-dashed w-full flex flex-col items-center justify-center text-slate-500 aspect-video shadow-sm"
+                      >
+                        <div className="w-6 h-6 border-2 border-violet-500 border-t-transparent rounded-full animate-spin mb-3"></div>
+                        <span className="text-xs font-medium text-center">
+                          Generating Shot {shot.shot_number}
+                          {nextVersion}...
+                        </span>
+                      </div>
+                    );
+                  })}
               </>
             )}
           </div>

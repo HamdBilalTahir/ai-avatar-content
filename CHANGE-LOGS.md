@@ -1,3 +1,40 @@
+## 🗓️ **2026-04-05**
+
+---
+
+### 💅 Styling and UI Improvements
+
+---
+
+> ### Video Script Editor — Light Theme and Grid Layouts
+>
+> - **What changed:**
+>   - Completely redesigned the Script Editor interface from dark mode to a light theme (`bg-slate-50`, `bg-white` cards, `border-slate-200`) to perfectly match the application's left sidebar styling.
+>   - Converted the "Image Library" and "Generated Media" sections from single-row horizontal scrolling to responsive grid layouts with vertical scrollbars.
+>   - Added a 3-second highlight animation (glowing violet ring and scaled play button) to newly generated videos upon API success to immediately draw attention.
+> - **Why:** Ensures visual consistency across the app while making it much easier to browse large amounts of media without awkward horizontal scrolling. The highlight effect provides clear visual feedback when long-running generations complete.
+> - **Files:**
+>   - `src/app/script/page.tsx`
+
+---
+
+### ✨ Features
+
+---
+
+> ### Video Script Editor — Generation Versioning & Stop Control
+>
+> - **What changed:**
+>   - **Versioning:** When re-generating a video for a shot, it no longer overwrites the old file. The backend now appends a version number (e.g. `shot_1 (1).mp4`) if the file exists. The frontend tracks an array of URLs per shot and renders all generated versions simultaneously in the grid.
+>   - **Stop Button:** Added a "Stop" button that appears during video generation. Clicking it instantly aborts the pending Next.js API fetch request (`AbortController`) and resets the UI loading state back to idle.
+>   - **Loader Versioning:** The loading spinner text now dynamically indicates which version is being generated (e.g., "Generating Shot 1 (v2)...").
+> - **Why:** Prevents accidental data loss of previously generated good takes, allowing users to compare multiple generations side-by-side. The stop button gives users immediate control to cancel long-running processes if they spot an error in their prompt.
+> - **Files:**
+>   - `src/app/script/page.tsx`
+>   - `src/app/api/script/generate-video/route.ts`
+
+---
+
 ## 🗓️ **2026-04-04**
 
 ---

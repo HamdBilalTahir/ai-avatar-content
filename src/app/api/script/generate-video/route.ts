@@ -22,15 +22,31 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const outputFilename = shotNumber
+    let outputFilename = shotNumber
       ? `shot_${shotNumber}.mp4`
       : `shot_${Date.now()}.mp4`;
-    const outputPath = path.join(
+    let outputPath = path.join(
       process.cwd(),
       'public',
       'generated',
       outputFilename
     );
+
+    // If file exists, append (1), (2), etc.
+    if (shotNumber) {
+      let counter = 1;
+      const fs = require('fs');
+      while (fs.existsSync(outputPath)) {
+        outputFilename = `shot_${shotNumber} (${counter}).mp4`;
+        outputPath = path.join(
+          process.cwd(),
+          'public',
+          'generated',
+          outputFilename
+        );
+        counter++;
+      }
+    }
 
     const generatedPath = await generateReel({
       prompt,
