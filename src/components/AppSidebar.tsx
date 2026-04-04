@@ -66,7 +66,7 @@ export default function AppSidebar() {
   const pathname = usePathname();
 
   return (
-    <aside className="flex w-16 flex-shrink-0 flex-col items-center border-r border-slate-200 bg-white py-4 gap-1">
+    <aside className="flex w-16 flex-shrink-0 flex-col items-center border-r border-slate-200 bg-white pt-4 pb-[max(24px,env(safe-area-inset-bottom))] gap-1 relative">
       {/* Logo mark */}
       <div className="mb-4 flex h-8 w-8 items-center justify-center rounded-xl bg-violet-600">
         <svg
@@ -85,9 +85,9 @@ export default function AppSidebar() {
             key={item.href}
             href={item.href}
             title={item.label}
-            className={`group flex flex-col items-center gap-1 rounded-xl px-1 py-2.5 w-12 transition ${
+            className={`group flex flex-col items-center justify-center gap-1 rounded-[12px] px-1 h-16 w-12 transition ${
               active
-                ? 'bg-violet-50 text-violet-700'
+                ? 'bg-violet-600/10 text-violet-700'
                 : 'text-slate-400 hover:bg-slate-100 hover:text-slate-700'
             }`}
           >

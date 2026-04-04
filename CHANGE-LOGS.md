@@ -6,6 +6,79 @@
 
 ---
 
+> ### Video Script Editor — Visual Polish and Whitespace Reductions
+>
+> - **What changed:** Defined a reusable `.field-label` CSS class for all section labels to ensure consistent typography (font weight, letter spacing, size, and color). Reduced the vertical padding in the Globals variable list and added a subtle 1px divider line between rows, cutting the section's total height by ~40%.
+> - **Why:** Inconsistent label styles made the UI look unpolished. The Globals list previously required too much scrolling due to excessive padding per variable row.
+> - **Files:**
+>   - `src/app/globals.css`
+>   - `src/app/script/page.tsx`
+>
+> ---
+>
+> ### Video Script Editor — Generation Settings and Media Fixes
+>
+> - **What changed:** Wrapped the API Key inputs into a collapsible "⚙️ API Settings" accordion, removed the Gemini API Key field completely, updated generated video thumbnails to use `object-cover` instead of `object-contain` to fix letterboxing, and added a clearer empty state to the Image Library with a camera icon and a direct "+ Upload your first image" button.
+> - **Why:** The API Key inputs were unnecessarily taking up prime real estate. The video thumbnails were rendering with large black bars. The empty state for the Image Library was confusing and lacked a clear call-to-action.
+> - **Files:**
+>   - `src/app/script/page.tsx`
+
+---
+
+> ### Video Script Editor — Shot Card UI Improvements
+>
+> - **What changed:** Enhanced the UI of Shot Cards, making collapsed shots show a prompt preview, changing the expand icon to a chevron, adding visual hierarchy (background and shadow) to the expanded state, and replacing the duration/resolution select dropdowns with touch-friendly pill button toggles.
+> - **Why:** Improves touch-friendliness on mobile, visual distinction between states, and provides context for collapsed shots.
+> - **Files:**
+>   - `src/app/script/page.tsx`
+
+---
+
+> ### Create Avatar Page — Layout and API Key UI
+>
+> - **What changed:** Switched the Create Avatar page to a single-column layout, moving the avatar image preview directly beneath the generation box. Hid the step 2 video/pipeline settings. Added a Gemini API Key input popup with validation state above the avatar description, and a new "Push to Image Library" button alongside the Download button.
+> - **Why:** Streamlines the avatar generation flow and makes providing the API key explicit and mandatory before generating images. The single-column layout provides a more focused user experience.
+> - **Files:**
+>   - `src/app/avatar/new/page.tsx`
+
+---
+
+### 🐛 Fixes
+
+---
+
+> ### Video Script Editor — UI Layout and Truncation Fixes
+>
+> - **What changed:** Fixed horizontal overflow on action buttons, updated variable names and values to use a CSS grid (`minmax(110px,auto) 1fr`) to ensure values are never left-orphaned and utilize available space cleanly, stacked the Globals description text above action buttons to fix overlap, added a visual separator border under the Globals header, corrected the sidebar navigation icon alignment and active highlight style on mobile, added bottom safe-area spacing to the sidebar, aligned the page title and Select All button visually, and added bottom padding to the scrollable list. Fixed the shot list header layout using flex-nowrap and overflow hidden so that titles and duration text safely truncate instead of wrapping into a broken second row. Moved the "Add New Shot" button into a sticky container at the bottom of the list for immediate access. Added visual disabled states (opacity and cursor) to the Generate button when zero shots are selected. Added collapsible section accordions with item counts and chevron indicators for major page sections (Shots, Generation Settings, Image Library, Generated Media) to fix infinite scrolling issues. Added a sticky page header to retain context, and moved the global "Select All" button contextually into the Shots section header.
+> - **Why:** The action buttons and variable names were illegible on smaller devices due to truncation and overflow, the layout felt clustered without clear separation, sidebar icons were misaligned, and the page lacked visual polish and safe-area adjustments for mobile viewports. The shot rows were breaking and overflowing on long text. The primary call-to-actions were misleading or buried out of view on smaller screens. The page lacked proper section navigation resulting in an infinite scroll, and the global Select All button was contextually ambiguous.
+> - **Files:**
+>   - `src/app/script/page.tsx`
+>   - `src/components/AppSidebar.tsx`
+
+---
+
+> ### Video Script Editor — Add Variable Modal Mobile Fix
+>
+> - **What changed:** Moved the "Add Variable" modal outside of its `overflow-hidden` container to the root level. Added `max-h-[90vh]`, `overflow-y-auto`, and sticky headers/footers to the modal.
+> - **Why:** The modal was being cut off and bleeding out of the frame on mobile devices without any way to scroll.
+> - **Files:**
+>   - `src/app/script/page.tsx`
+
+---
+
+### 💅 Styling and UI Improvements
+
+---
+
+> ### Video Script Editor — Mobile Responsive Layout Fix
+>
+> - **What changed:** Fixed the mobile layout for the Script page by changing the top-level container to `flex flex-col lg:flex-row`.
+> - **Why:** The layout was rendering improperly on mobile devices (squished side-by-side panes). Using `flex-col` on mobile ensures the left and right panes stack vertically as expected, improving readability and usability on smaller screens.
+> - **Files:**
+>   - `src/app/script/page.tsx`
+>
+> ---
+
 > ### Video Script Editor — Light Theme and Grid Layouts
 >
 > - **What changed:**

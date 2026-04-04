@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import type {
   AvatarGenerateResponse,
@@ -52,6 +52,10 @@ const DRAFT_IMAGE_KEY = 'ai-avatar-draft-image';
 
 export default function AvatarNewPage() {
   const router = useRouter();
+
+  const [geminiApiKey, setGeminiApiKey] = useState('');
+  const [isApiKeyPopupOpen, setIsApiKeyPopupOpen] = useState(false);
+  const [tempApiKey, setTempApiKey] = useState('');
 
   const [avatarPrompt, setAvatarPrompt] = useState('');
   const [topic, setTopic] = useState('');
@@ -133,6 +137,11 @@ export default function AvatarNewPage() {
         };
         setImageBase64(img.imageBase64);
         setMimeType(img.mimeType);
+      }
+
+      const savedApiKey = localStorage.getItem('gemini_api_key');
+      if (savedApiKey) {
+        setGeminiApiKey(savedApiKey);
       }
     } catch {
       // Corrupt storage — ignore and start fresh
@@ -266,7 +275,25 @@ export default function AvatarNewPage() {
     setReferenceImages((prev) => prev.filter((_, i) => i !== index));
   }
 
+  function handlePushToLibrary() {
+    if (!imageBase64 || !mimeType) return;
+    const existing = localStorage.getItem('avatar_image_library');
+    const library = existing ? JSON.parse(existing) : [];
+    library.push({
+      id: Date.now().toString(),
+      data: imageBase64,
+      mime_type: mimeType,
+      timestamp: Date.now(),
+    });
+    localStorage.setItem('avatar_image_library', JSON.stringify(library));
+    alert('Successfully pushed to Image Library!');
+  }
+
   async function handleGenerate() {
+    if (!geminiApiKey.trim()) {
+      setAvatarError('Please enter a Gemini API Key first.');
+      return;
+    }
     if (!avatarPrompt.trim()) return;
     setAvatarError(null);
     setImageBase64(null);
@@ -502,12 +529,106 @@ export default function AvatarNewPage() {
           </p>
         </div>
 
-        {/* Two-column layout */}
-        <div className="flex flex-col gap-8 lg:flex-row">
-          {/* Left column — controls */}
-          <div className="flex flex-col gap-5 lg:w-1/2">
+        {/* Single-column layout */}
+        <div className="flex flex-col gap-8">
+          {/* Controls */}
+          <div className="flex flex-col gap-5 w-full lg:w-2/3 max-w-2xl">
             {/* Prompt card */}
             <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+              {/* API Key Section */}
+              <div className="mb-4 pb-4 border-b border-slate-100 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <label className="block text-sm font-semibold text-slate-700">
+                    GEMINI API Key
+                  </label>
+                  {geminiApiKey ? (
+                    <span className="flex items-center gap-1.5 px-2 py-0.5 bg-emerald-50 text-emerald-700 text-xs font-medium rounded-full border border-emerald-200">
+                      ✓ API Key (saved)
+                    </span>
+                  ) : (
+                    <span className="flex items-center gap-1.5 px-2 py-0.5 bg-red-50 text-red-600 text-xs font-medium rounded-full border border-red-200">
+                      * Please enter an API key
+                    </span>
+                  )}
+                </div>
+
+                <button
+                  onClick={() => {
+                    setTempApiKey(geminiApiKey);
+                    setIsApiKeyPopupOpen(true);
+                  }}
+                  className="p-1.5 text-slate-400 hover:text-violet-600 hover:bg-violet-50 rounded transition-colors"
+                  title="Edit API Key"
+                >
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <path d="M12 20h9"></path>
+                    <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
+                  </svg>
+                </button>
+              </div>
+
+              {isApiKeyPopupOpen && (
+                <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm">
+                  <div className="bg-white rounded-xl shadow-xl w-full max-w-md overflow-hidden flex flex-col">
+                    <div className="p-4 border-b border-slate-100 flex items-center justify-between">
+                      <h3 className="font-bold text-slate-800">
+                        GEMINI API Key
+                      </h3>
+                      <button
+                        onClick={() => setIsApiKeyPopupOpen(false)}
+                        className="text-slate-400 hover:text-slate-600"
+                      >
+                        ×
+                      </button>
+                    </div>
+                    <div className="p-6">
+                      <input
+                        type="password"
+                        value={tempApiKey}
+                        onChange={(e) => setTempApiKey(e.target.value)}
+                        placeholder="Paste your Gemini API key here..."
+                        className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-900 focus:outline-none focus:border-violet-500 focus:ring-1 focus:ring-violet-500 font-mono"
+                      />
+                    </div>
+                    <div className="p-4 border-t border-slate-100 bg-slate-50 flex justify-end gap-2">
+                      <button
+                        onClick={() => setIsApiKeyPopupOpen(false)}
+                        className="px-4 py-2 text-slate-600 hover:text-slate-800 text-sm font-medium transition-colors"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={() => {
+                          setGeminiApiKey(tempApiKey);
+                          localStorage.setItem('gemini_api_key', tempApiKey);
+                          setIsApiKeyPopupOpen(false);
+                          if (
+                            tempApiKey.trim() &&
+                            avatarError ===
+                              'Please enter a Gemini API Key first.'
+                          ) {
+                            setAvatarError(null);
+                          }
+                        }}
+                        className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white text-sm font-medium rounded-lg transition-colors shadow-sm"
+                      >
+                        Save
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               <label className="block text-sm font-semibold text-slate-700 mb-2">
                 Avatar description
               </label>
@@ -732,10 +853,151 @@ export default function AvatarNewPage() {
               </div>
             )}
 
+            {/* Avatar Preview Section moved directly under the generate box */}
+            <div
+              className="w-full mt-6"
+              style={{ animation: 'fadeSlideIn 0.4s ease both' }}
+            >
+              <div
+                className="relative w-full max-w-md mx-auto rounded-2xl overflow-hidden border border-slate-200 bg-white shadow-sm"
+                style={{
+                  aspectRatio:
+                    imageBase64 && imageAspectRatio ? imageAspectRatio : '3/4',
+                }}
+              >
+                {imageBase64 ? (
+                  <>
+                    <img
+                      src={`data:${mimeType};base64,${imageBase64}`}
+                      alt="Generated avatar"
+                      className="w-full h-full object-contain transition-opacity duration-700 cursor-zoom-in"
+                      style={{ opacity: imageVisible ? 1 : 0 }}
+                      onClick={() => setLightboxOpen(true)}
+                      onLoad={(e) => {
+                        const img = e.currentTarget;
+                        setImageAspectRatio(
+                          `${img.naturalWidth} / ${img.naturalHeight}`
+                        );
+                        setImageVisible(true);
+                      }}
+                    />
+                    <button
+                      onClick={handleCopy}
+                      title="Copy image"
+                      className="absolute top-2 right-2 flex h-8 w-8 items-center justify-center rounded-lg bg-black/40 text-white backdrop-blur-sm transition hover:bg-black/60 active:scale-95"
+                    >
+                      {copied ? (
+                        <svg
+                          className="h-4 w-4 text-emerald-400"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth={2.5}
+                        >
+                          <path
+                            d="M5 13l4 4L19 7"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          />
+                        </svg>
+                      ) : (
+                        <svg
+                          className="h-4 w-4"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth={2}
+                        >
+                          <rect x="9" y="9" width="13" height="13" rx="2" />
+                          <path
+                            d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"
+                            strokeLinecap="round"
+                          />
+                        </svg>
+                      )}
+                    </button>
+                  </>
+                ) : (
+                  <div className="flex h-full flex-col items-center justify-center gap-3 min-h-[300px] bg-slate-50">
+                    <div className="rounded-full bg-slate-200 p-5">
+                      <PersonIcon />
+                    </div>
+                    <p className="text-sm text-slate-400">
+                      Your avatar will appear here
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              {imageBase64 && (
+                <>
+                  <div className="mt-3 flex items-center justify-center gap-3">
+                    <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 border border-emerald-200 px-3 py-1 text-xs font-medium text-emerald-700">
+                      <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                      Avatar ready
+                    </span>
+                    <span className="text-xs text-slate-400">
+                      Generated {generationCount}{' '}
+                      {generationCount === 1 ? 'time' : 'times'}
+                    </span>
+                  </div>
+
+                  <div className="mt-4 flex flex-wrap gap-4 items-center justify-between">
+                    <button
+                      onClick={handleGenerate}
+                      disabled={isGeneratingAvatar || !avatarPrompt.trim()}
+                      className="flex flex-1 items-center justify-center gap-1.5 rounded-xl border-2 border-violet-200 bg-white py-2.5 text-sm font-semibold text-violet-700 transition hover:border-violet-300 hover:bg-violet-50 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 min-w-[140px]"
+                    >
+                      {isGeneratingAvatar ? <Spinner /> : '↺'} Regenerate
+                    </button>
+
+                    <div className="flex gap-4 flex-1 justify-end min-w-[300px]">
+                      <button
+                        onClick={handlePushToLibrary}
+                        className="flex flex-1 items-center justify-center gap-1.5 rounded-xl border-2 border-violet-600 bg-violet-50 text-violet-700 py-2.5 text-sm font-semibold transition hover:bg-violet-100 active:scale-[0.98]"
+                      >
+                        <svg
+                          xmlns="http://www.w3.org/2000/svg"
+                          width="16"
+                          height="16"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        >
+                          <rect
+                            x="3"
+                            y="3"
+                            width="18"
+                            height="18"
+                            rx="2"
+                            ry="2"
+                          ></rect>
+                          <circle cx="8.5" cy="8.5" r="1.5"></circle>
+                          <polyline points="21 15 16 10 5 21"></polyline>
+                        </svg>
+                        Push to Image Library
+                      </button>
+
+                      <button
+                        onClick={handleDownload}
+                        className="flex flex-1 items-center justify-center gap-1.5 rounded-xl border-2 border-slate-200 bg-white py-2.5 text-sm font-semibold text-slate-600 transition hover:border-slate-300 hover:bg-slate-50 active:scale-[0.98]"
+                      >
+                        <DownloadIcon />
+                        Download
+                      </button>
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+
             {/* Phase 2 — topic + pipeline */}
             {imageBase64 && (
               <div
-                className="flex flex-col gap-5"
+                className="flex flex-col gap-5 hidden"
                 style={{ animation: 'fadeSlideIn 0.4s ease both' }}
               >
                 {/* Divider */}
@@ -1097,115 +1359,6 @@ export default function AvatarNewPage() {
                 )}
               </div>
             )}
-          </div>
-
-          {/* Right column — avatar preview */}
-          <div className="flex flex-col items-center gap-4 lg:w-1/2">
-            <div className="w-full max-w-sm">
-              <div
-                className="relative w-full rounded-2xl overflow-hidden border border-slate-200 bg-white shadow-sm"
-                style={{
-                  aspectRatio:
-                    imageBase64 && imageAspectRatio ? imageAspectRatio : '3/4',
-                }}
-              >
-                {imageBase64 ? (
-                  <>
-                    <img
-                      src={`data:${mimeType};base64,${imageBase64}`}
-                      alt="Generated avatar"
-                      className="w-full h-full object-contain transition-opacity duration-700 cursor-zoom-in"
-                      style={{ opacity: imageVisible ? 1 : 0 }}
-                      onClick={() => setLightboxOpen(true)}
-                      onLoad={(e) => {
-                        const img = e.currentTarget;
-                        setImageAspectRatio(
-                          `${img.naturalWidth} / ${img.naturalHeight}`
-                        );
-                        setImageVisible(true);
-                      }}
-                    />
-                    <button
-                      onClick={handleCopy}
-                      title="Copy image"
-                      className="absolute top-2 right-2 flex h-8 w-8 items-center justify-center rounded-lg bg-black/40 text-white backdrop-blur-sm transition hover:bg-black/60 active:scale-95"
-                    >
-                      {copied ? (
-                        <svg
-                          className="h-4 w-4 text-emerald-400"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth={2.5}
-                        >
-                          <path
-                            d="M5 13l4 4L19 7"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                          />
-                        </svg>
-                      ) : (
-                        <svg
-                          className="h-4 w-4"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth={2}
-                        >
-                          <rect x="9" y="9" width="13" height="13" rx="2" />
-                          <path
-                            d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"
-                            strokeLinecap="round"
-                          />
-                        </svg>
-                      )}
-                    </button>
-                  </>
-                ) : (
-                  <div className="flex h-full flex-col items-center justify-center gap-3">
-                    <div className="rounded-full bg-slate-100 p-5">
-                      <PersonIcon />
-                    </div>
-                    <p className="text-sm text-slate-400">
-                      Your avatar will appear here
-                    </p>
-                  </div>
-                )}
-              </div>
-
-              {imageBase64 && (
-                <>
-                  <div className="mt-3 flex items-center justify-center gap-3">
-                    <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 border border-emerald-200 px-3 py-1 text-xs font-medium text-emerald-700">
-                      <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-                      Avatar ready
-                    </span>
-                    <span className="text-xs text-slate-400">
-                      Generated {generationCount}{' '}
-                      {generationCount === 1 ? 'time' : 'times'}
-                    </span>
-                  </div>
-
-                  <div className="mt-3 flex gap-3 w-full">
-                    <button
-                      onClick={handleGenerate}
-                      disabled={isGeneratingAvatar || !avatarPrompt.trim()}
-                      className="flex flex-1 items-center justify-center gap-1.5 rounded-xl border-2 border-violet-200 bg-white py-2.5 text-sm font-semibold text-violet-700 transition hover:border-violet-300 hover:bg-violet-50 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      {isGeneratingAvatar ? <Spinner /> : '↺'}
-                      Regenerate
-                    </button>
-                    <button
-                      onClick={handleDownload}
-                      className="flex flex-1 items-center justify-center gap-1.5 rounded-xl border-2 border-slate-200 bg-white py-2.5 text-sm font-semibold text-slate-600 transition hover:border-slate-300 hover:bg-slate-50 active:scale-[0.98]"
-                    >
-                      <DownloadIcon />
-                      Download
-                    </button>
-                  </div>
-                </>
-              )}
-            </div>
           </div>
         </div>
       </div>
