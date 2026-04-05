@@ -20,26 +20,26 @@ const NAV = [
       </svg>
     ),
   },
-  {
-    href: '/video-maker',
-    label: 'Video Maker',
-    match: (p: string) => p.startsWith('/video-maker'),
-    icon: (
-      <svg
-        className="h-5 w-5"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth={1.75}
-      >
-        <rect x="2" y="6" width="20" height="12" rx="2" />
-        <path
-          d="M7 6V18M17 6V18M2 10h3M19 10h3M2 14h3M19 14h3"
-          strokeLinecap="round"
-        />
-      </svg>
-    ),
-  },
+  // {
+  //   href: '/video-maker',
+  //   label: 'Video Maker',
+  //   match: (p: string) => p.startsWith('/video-maker'),
+  //   icon: (
+  //     <svg
+  //       className="h-5 w-5"
+  //       viewBox="0 0 24 24"
+  //       fill="none"
+  //       stroke="currentColor"
+  //       strokeWidth={1.75}
+  //     >
+  //       <rect x="2" y="6" width="20" height="12" rx="2" />
+  //       <path
+  //         d="M7 6V18M17 6V18M2 10h3M19 10h3M2 14h3M19 14h3"
+  //         strokeLinecap="round"
+  //       />
+  //     </svg>
+  //   ),
+  // },
   {
     href: '/script',
     label: 'Script',

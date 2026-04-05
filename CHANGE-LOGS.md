@@ -2,6 +2,19 @@
 
 ---
 
+### 💅 Styling and UI Improvements
+
+---
+
+> ### Hide Video Maker
+>
+> - **What changed:** Commented out the Video Maker link in the sidebar navigation.
+> - **Why:** The feature is not needed right now, so the link is hidden without removing the underlying code.
+> - **Files:**
+>   - `src/components/AppSidebar.tsx`
+
+---
+
 ### ✨ Features
 
 ---
