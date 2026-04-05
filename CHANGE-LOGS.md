@@ -2,7 +2,29 @@
 
 ---
 
+### 🐛 Fixes
+
+---
+
+> ### Bulk Edit Accepts Empty Submissions
+>
+> - **What changed:** Saving an empty or whitespace-only bulk edit for Globals and Shots no longer triggers an error.
+> - **Why:** Clearing all shots or globals via bulk edit is a valid action, but empty JSON caused parse errors for Shots, and we wanted to ensure empty Globals saved properly. Now empty strings are caught and cleanly parsed as an empty array before attempting JSON parse.
+> - **Files:**
+>   - `src/app/script/page.tsx`
+
+---
+
 ### ✨ Features
+
+---
+
+> ### Shots Bulk Edit
+>
+> - **What changed:** Added a "Bulk Edit" feature for the Shots section, allowing users to view and edit all shots as a single JSON array in a large textarea. It validates the JSON on save, drops unknown keys, and warns on invalid syntax.
+> - **Why:** Makes it much easier for power users to copy/paste entire scripts or make large sweeping changes to multiple shots at once without clicking through each accordion.
+> - **Files:**
+>   - `src/app/script/page.tsx`
 
 ---
 
@@ -25,6 +47,42 @@
 ---
 
 ### 💅 UI Improvements
+
+---
+
+> ### DeviceAwareUpload — Simplified to Native Picker with Image Library Option
+>
+> - **What changed:** Removed all custom mobile UI (bottom sheet, camera overlay, getUserMedia flow, gallery/file differentiation). Replaced with a single hidden `<input type="file" accept="image/*" multiple>` that the OS handles natively. When `hasLibraryImages` is false, clicking upload goes straight to the native picker. When `hasLibraryImages` is true, a small portal menu appears with two options: **Image Library** and **Upload Images**. The menu is positioned via `getBoundingClientRect` and rendered into `document.body` so `overflow: hidden` ancestors cannot clip it. Outside-click detection uses `click` (not `mousedown`) so button handlers always fire before dismissal.
+> - **Why:** The previous custom MobileMenu was broken — `mousedown` outside-click fired before button click events, unmounting the portal before handlers ran. The desktop dropdown was clipped by `overflow: hidden` ancestors in the script page. Delegating to the OS native picker fixes both issues with zero custom UI needed.
+> - **Files:**
+>   - `src/components/DeviceAwareUpload.tsx`
+
+---
+
+> ### Avatar Page — Two-Column Desktop Layout
+>
+> - **What changed:** On desktop (≥768px) the Create Your Avatar page now renders in two columns — form on the left (`flex: 1`), image preview on the right (`w-[400px]`, `flex-shrink: 0`, `sticky top-6`). The page title sits above both columns as a full-width header so the form card and preview box are top-aligned. On mobile (<768px) the layout stays single-column and unchanged. The right column shows a placeholder when no image has been generated, and fills with the avatar once generated. Action buttons (Regenerate, Push to Library, Download) sit below the preview in the right column. Generate Avatar and Import stay in the left column.
+> - **Why:** The original single-column layout wasted the full right half of the viewport on desktop and buried the preview below a long form.
+> - **Files:**
+>   - `src/app/avatar/new/page.tsx`
+
+---
+
+> ### Avatar Page — "Step 1 of 2" Pill Removed
+>
+> - **What changed:** Removed the "Step 1 of 2" step indicator pill from the page header. Step 2 components (topic, script, voice, pipeline) are hidden, making the step indicator misleading.
+> - **Why:** Surfacing a step count when step 2 is not reachable confuses the user flow.
+> - **Files:**
+>   - `src/app/avatar/new/page.tsx`
+
+---
+
+> ### Update API Key Component UI in Avatar Page
+>
+> - **What changed:** Matched the Gemini API key component UI in the avatar page to look identical to the Veo API key component in the script page.
+> - **Why:** To maintain consistent UI and UX across the application for API key inputs.
+> - **Files:**
+>   - `src/app/avatar/new/page.tsx`
 
 ---
 

@@ -46,6 +46,9 @@ export default function ScriptPage() {
   const [isMediaExpanded, setIsMediaExpanded] = useState(true);
   const [isBulkEditing, setIsBulkEditing] = useState(false);
   const [bulkText, setBulkText] = useState('');
+  const [isShotsBulkEditing, setIsShotsBulkEditing] = useState(false);
+  const [shotsBulkText, setShotsBulkText] = useState('');
+  const [shotsBulkWarning, setShotsBulkWarning] = useState<string | null>(null);
   const [editingVarIndex, setEditingVarIndex] = useState<number | null>(null);
   const [editingVarContent, setEditingVarContent] = useState({
     name: '',
@@ -295,43 +298,46 @@ export default function ScriptPage() {
                           // Save bulk edit
                           const newGlobals: { name: string; value: string }[] =
                             [];
-                          const lines = bulkText.split('\n');
-                          let currentKey = '';
-                          let currentValue = '';
-                          let inBlock = false;
+                          const trimmedBulkText = bulkText.trim();
+                          if (trimmedBulkText !== '') {
+                            const lines = bulkText.split('\n');
+                            let currentKey = '';
+                            let currentValue = '';
+                            let inBlock = false;
 
-                          for (let i = 0; i < lines.length; i++) {
-                            const line = lines[i];
-                            if (!inBlock && line.includes('="""')) {
-                              const parts = line.split('="""');
-                              currentKey = parts[0].trim();
-                              currentValue = parts[1] || '';
-                              inBlock = true;
-                              if (currentValue.endsWith('"""')) {
-                                currentValue = currentValue.slice(0, -3);
+                            for (let i = 0; i < lines.length; i++) {
+                              const line = lines[i];
+                              if (!inBlock && line.includes('="""')) {
+                                const parts = line.split('="""');
+                                currentKey = parts[0].trim();
+                                currentValue = parts[1] || '';
+                                inBlock = true;
+                                if (currentValue.endsWith('"""')) {
+                                  currentValue = currentValue.slice(0, -3);
+                                  newGlobals.push({
+                                    name: currentKey,
+                                    value: currentValue,
+                                  });
+                                  inBlock = false;
+                                }
+                              } else if (inBlock) {
+                                if (line.endsWith('"""')) {
+                                  currentValue += '\n' + line.slice(0, -3);
+                                  newGlobals.push({
+                                    name: currentKey,
+                                    value: currentValue,
+                                  });
+                                  inBlock = false;
+                                } else {
+                                  currentValue += '\n' + line;
+                                }
+                              } else if (line.includes('=')) {
+                                const [k, ...v] = line.split('=');
                                 newGlobals.push({
-                                  name: currentKey,
-                                  value: currentValue,
+                                  name: k.trim(),
+                                  value: v.join('=').trim(),
                                 });
-                                inBlock = false;
                               }
-                            } else if (inBlock) {
-                              if (line.endsWith('"""')) {
-                                currentValue += '\n' + line.slice(0, -3);
-                                newGlobals.push({
-                                  name: currentKey,
-                                  value: currentValue,
-                                });
-                                inBlock = false;
-                              } else {
-                                currentValue += '\n' + line;
-                              }
-                            } else if (line.includes('=')) {
-                              const [k, ...v] = line.split('=');
-                              newGlobals.push({
-                                name: k.trim(),
-                                value: v.join('=').trim(),
-                              });
                             }
                           }
                           setGlobals(newGlobals);
@@ -380,7 +386,7 @@ export default function ScriptPage() {
                       value={bulkText}
                       onChange={(e) => setBulkText(e.target.value)}
                       placeholder={'KEY=value\nLONG_KEY="""long\nvalue"""'}
-                      className="w-full h-64 bg-slate-900 text-emerald-400 font-mono text-sm p-4 rounded-lg focus:outline-none focus:ring-2 focus:ring-violet-500"
+                      className="w-full h-64 bg-slate-50 border border-slate-200 text-slate-900 font-mono text-sm p-4 rounded-xl focus:outline-none focus:border-violet-400 focus:bg-white focus:ring-2 focus:ring-violet-100 transition"
                     />
                     <div className="flex justify-end gap-2">
                       <button
@@ -474,13 +480,44 @@ export default function ScriptPage() {
             className="sticky top-[60px] lg:top-[76px] z-40 bg-slate-50 py-3 flex items-center justify-between cursor-pointer border-b border-slate-200/60 mb-4"
             onClick={() => setIsShotsExpanded(!isShotsExpanded)}
           >
-            <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+            <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2 shrink-0">
               Shots
               <span className="text-xs font-normal text-slate-500 bg-white border border-slate-200 px-2 py-0.5 rounded-full">
                 {shots.length} items
               </span>
             </h2>
-            <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2 ml-auto">
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setShotsBulkText(
+                    JSON.stringify(
+                      shots.map(
+                        ({
+                          shot_number,
+                          duration,
+                          resolution,
+                          imageRefs,
+                          prompt,
+                        }) => ({
+                          shot_number,
+                          duration,
+                          resolution,
+                          imageRefs,
+                          prompt,
+                        })
+                      ),
+                      null,
+                      2
+                    )
+                  );
+                  setIsShotsBulkEditing(true);
+                  setIsShotsExpanded(true);
+                }}
+                className="text-xs font-semibold text-slate-600 border border-slate-200 bg-white hover:bg-slate-50 px-2.5 py-1 rounded-lg transition-colors whitespace-nowrap"
+              >
+                Bulk Edit
+              </button>
               <button
                 onClick={(e) => {
                   e.stopPropagation();
@@ -489,15 +526,116 @@ export default function ScriptPage() {
                     shots.map((s) => ({ ...s, selected: !allSelected }))
                   );
                 }}
-                className="text-sm text-violet-600 hover:text-violet-700 font-medium bg-violet-50 px-3 py-1 rounded-lg transition-colors"
+                className="text-xs font-semibold text-violet-600 border border-violet-200 bg-violet-50 hover:bg-violet-100 px-2.5 py-1 rounded-lg transition-colors whitespace-nowrap"
               >
                 {shots.every((s) => s.selected) ? 'Deselect All' : 'Select All'}
               </button>
-              <div className="text-slate-400">
+              <div className="text-slate-400 pl-1">
                 {isShotsExpanded ? '▼' : '▶'}
               </div>
             </div>
           </div>
+
+          {/* Shots bulk warning */}
+          {shotsBulkWarning && (
+            <div className="mb-3 flex items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2.5">
+              <span className="text-xs text-amber-700">
+                ⚠ {shotsBulkWarning}
+              </span>
+              <button
+                onClick={() => setShotsBulkWarning(null)}
+                className="text-amber-400 hover:text-amber-600 text-xs shrink-0"
+              >
+                ✕
+              </button>
+            </div>
+          )}
+
+          {/* Shots bulk edit textarea */}
+          {isShotsBulkEditing && (
+            <div className="mb-4 space-y-3">
+              <textarea
+                value={shotsBulkText}
+                onChange={(e) => setShotsBulkText(e.target.value)}
+                className="w-full h-72 bg-slate-50 border border-slate-200 text-slate-900 font-mono text-xs p-4 rounded-xl focus:outline-none focus:border-violet-400 focus:bg-white focus:ring-2 focus:ring-violet-100 resize-y transition"
+                placeholder='[{"shot_number":1,"duration":8,"resolution":"720p","imageRefs":[],"prompt":"..."}]'
+                spellCheck={false}
+              />
+              <div className="flex justify-end gap-2">
+                <button
+                  onClick={() => {
+                    setIsShotsBulkEditing(false);
+                    setShotsBulkWarning(null);
+                  }}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-medium rounded-lg transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => {
+                    const VALID_KEYS = new Set([
+                      'shot_number',
+                      'duration',
+                      'resolution',
+                      'imageRefs',
+                      'prompt',
+                    ]);
+                    const trimmedText = shotsBulkText.trim();
+                    let parsed: unknown;
+                    if (trimmedText === '') {
+                      parsed = [];
+                    } else {
+                      try {
+                        parsed = JSON.parse(trimmedText);
+                      } catch {
+                        setShotsBulkWarning(
+                          'Invalid JSON — please fix the syntax and try again.'
+                        );
+                        return;
+                      }
+                    }
+                    if (!Array.isArray(parsed)) {
+                      setShotsBulkWarning(
+                        'Expected a JSON array of shot objects.'
+                      );
+                      return;
+                    }
+                    const discardedKeys = new Set<string>();
+                    const newShots: Shot[] = (
+                      parsed as Record<string, unknown>[]
+                    ).map((raw, i) => {
+                      const base = shots[i] ?? {};
+                      const cleaned: Partial<Shot> = {};
+                      for (const key of Object.keys(raw)) {
+                        if (VALID_KEYS.has(key)) {
+                          (cleaned as Record<string, unknown>)[key] = raw[key];
+                        } else {
+                          discardedKeys.add(key);
+                        }
+                      }
+                      return { ...base, ...cleaned, status: 'idle' } as Shot;
+                    });
+                    setShots(newShots);
+                    localStorage.setItem(
+                      'podcast_shots',
+                      JSON.stringify(newShots)
+                    );
+                    setIsShotsBulkEditing(false);
+                    if (discardedKeys.size > 0) {
+                      const msg = `Unknown keys discarded: ${[...discardedKeys].join(', ')}`;
+                      setShotsBulkWarning(msg);
+                      setTimeout(() => setShotsBulkWarning(null), 5000);
+                    } else {
+                      setShotsBulkWarning(null);
+                    }
+                  }}
+                  className="px-4 py-2 bg-violet-600 hover:bg-violet-700 text-white text-sm font-medium rounded-lg transition-colors"
+                >
+                  Save
+                </button>
+              </div>
+            </div>
+          )}
 
           {isShotsExpanded && (
             <div className="space-y-4 pb-32 relative w-full">
