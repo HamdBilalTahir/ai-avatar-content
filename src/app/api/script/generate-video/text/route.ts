@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { generateReelText } from '@/services/gemini-video';
 import { resolveOutputPath } from '@/lib/video-output';
+import fs from 'fs/promises';
 
 export async function POST(req: NextRequest) {
   try {
@@ -13,7 +14,7 @@ export async function POST(req: NextRequest) {
         { status: 400 }
       );
 
-    const { outputPath, videoUrl } = resolveOutputPath(shotNumber);
+    const { outputPath, outputFilename } = resolveOutputPath(shotNumber);
 
     const generatedPath = await generateReelText({
       prompt,
@@ -25,7 +26,16 @@ export async function POST(req: NextRequest) {
     });
 
     if (generatedPath) {
-      return NextResponse.json({ videoUrl }, { status: 200 });
+      const buffer = await fs.readFile(outputPath);
+      return new NextResponse(buffer, {
+        status: 200,
+        headers: {
+          'Content-Type': 'video/mp4',
+          'Content-Length': buffer.byteLength.toString(),
+          'X-Video-Filename': outputFilename,
+          'Cache-Control': 'no-store',
+        },
+      });
     }
     return NextResponse.json(
       { error: 'Failed to generate video' },

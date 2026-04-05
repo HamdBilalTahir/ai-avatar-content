@@ -145,13 +145,11 @@ export default function ScriptPage() {
                   )
                   .map(([, url]) => url);
                 if (matchingUrls.length === 0) return shot;
-                const merged = Array.from(
-                  new Set([...(shot.generatedVideoUrls || []), ...matchingUrls])
-                );
+                // Replace stale blob URLs (from previous session) with fresh IndexedDB ones
                 return {
                   ...shot,
-                  generatedVideoUrls: merged,
-                  generatedVideoUrl: merged[merged.length - 1],
+                  generatedVideoUrls: matchingUrls,
+                  generatedVideoUrl: matchingUrls[matchingUrls.length - 1],
                   status:
                     shot.status !== 'generating' ? 'completed' : shot.status,
                 };
@@ -1400,49 +1398,51 @@ export default function ScriptPage() {
                             body: JSON.stringify(body),
                           });
 
-                          const data = await res.json();
+                          // API routes return video/mp4 binary on success, JSON on error
+                          let videoUrl: string | null = null;
+                          let errorMsg: string | null = null;
 
-                          // Save to IndexedDB so video survives page reloads / Vercel cold starts
-                          if (res.ok && data.videoUrl) {
+                          const contentType =
+                            res.headers.get('content-type') || '';
+                          if (res.ok && contentType.startsWith('video/')) {
+                            const blob = await res.blob();
+                            const filename =
+                              res.headers.get('x-video-filename') ||
+                              `shot_${Date.now()}.mp4`;
                             try {
-                              const videoRes = await fetch(data.videoUrl);
-                              if (videoRes.ok) {
-                                const blob = await videoRes.blob();
-                                const filename = data.videoUrl
-                                  .split('/')
-                                  .pop()!;
-                                await saveGeneratedVideo(filename, blob);
-                                // Replace server URL with local blob URL for immediate playback
-                                data.videoUrl = URL.createObjectURL(blob);
-                              }
+                              await saveGeneratedVideo(filename, blob);
                             } catch {
-                              // Non-fatal — still use server URL
+                              // IndexedDB failure is non-fatal
                             }
+                            videoUrl = URL.createObjectURL(blob);
+                          } else {
+                            const data = await res.json();
+                            errorMsg = data.error || 'Video generation failed.';
                           }
 
                           setShots((prev) => {
                             const newShots = [...prev];
-                            if (res.ok && data.videoUrl) {
+                            if (videoUrl) {
                               const existingUrls =
                                 newShots[i].generatedVideoUrls || [];
                               const mergedUrls = Array.from(
-                                new Set([...existingUrls, data.videoUrl])
+                                new Set([...existingUrls, videoUrl])
                               );
                               newShots[i] = {
                                 ...newShots[i],
                                 status: 'completed',
-                                generatedVideoUrl: data.videoUrl,
+                                generatedVideoUrl: videoUrl,
                                 generatedVideoUrls: mergedUrls,
                               };
 
                               // Trigger hover animation for 3 seconds
                               setRecentSuccessUrls((prev) => [
                                 ...prev,
-                                data.videoUrl,
+                                videoUrl!,
                               ]);
                               setTimeout(() => {
                                 setRecentSuccessUrls((prev) =>
-                                  prev.filter((u) => u !== data.videoUrl)
+                                  prev.filter((u) => u !== videoUrl)
                                 );
                               }, 3000);
                             } else {
@@ -1450,11 +1450,12 @@ export default function ScriptPage() {
                                 ...newShots[i],
                                 status: 'error',
                               };
-                              const msg =
-                                data.error || 'Video generation failed.';
-                              console.warn('Failed to generate video:', msg);
+                              console.warn(
+                                'Failed to generate video:',
+                                errorMsg
+                              );
                               showGenerationToast(
-                                `Shot ${shots[i].shot_number}: ${msg}`
+                                `Shot ${shots[i].shot_number}: ${errorMsg}`
                               );
                             }
                             return newShots;
@@ -1648,7 +1649,7 @@ export default function ScriptPage() {
           </div>
 
           {isMediaExpanded && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 lg:overflow-y-auto lg:h-full content-start pr-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 overflow-y-auto max-h-[60vh] lg:max-h-none lg:h-full content-start pr-2">
               {shots.filter((s) => s.generatedVideoUrls?.length).length === 0 &&
               shots.filter((s) => s.status === 'generating').length === 0 ? (
                 <div className="col-span-full text-center text-slate-500 text-sm mt-4 p-6 border border-dashed border-slate-300 rounded-lg bg-slate-50">
@@ -1685,15 +1686,17 @@ export default function ScriptPage() {
                               {versionLabel}
                             </span>
                             <div className="flex items-center gap-2">
-                              <a
-                                href={url}
-                                download={`Shot_${shot.shot_number}${versionLabel}.mp4`}
-                                target="_blank"
-                                rel="noreferrer"
+                              <button
+                                onClick={() => {
+                                  const a = document.createElement('a');
+                                  a.href = url;
+                                  a.download = `Shot_${shot.shot_number}${versionLabel}.mp4`;
+                                  a.click();
+                                }}
                                 className="text-xs text-violet-600 hover:text-violet-700 font-medium"
                               >
                                 Download
-                              </a>
+                              </button>
                               <button
                                 onClick={() =>
                                   setVideoToDelete({
@@ -1715,6 +1718,7 @@ export default function ScriptPage() {
                           >
                             <video
                               src={url}
+                              preload="metadata"
                               className="w-full h-full object-cover pointer-events-none"
                             />
                             <div

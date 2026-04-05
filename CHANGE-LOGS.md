@@ -2,6 +2,22 @@
 
 ---
 
+### 🐛 Fixes
+
+---
+
+> ### Video Generation API Returns Binary MP4 Stream
+>
+> - **What changed:** Modified the three video generation API routes (`/text`, `/image-direct`, `/image-refs`) to stream the generated MP4 file directly to the client as a `video/mp4` binary with appropriate headers (including `X-Video-Filename`) instead of returning a JSON object containing the `videoUrl`. The client (`src/app/script/page.tsx`) was updated to handle the binary response by converting it to a blob, creating a local object URL, and initiating download via a programmatic `<a>` tag rather than relying on navigation.
+> - **Why:** Returning a URL from the API and requiring the client to fetch it again caused issues. By returning the binary data directly, we avoid an extra roundtrip and prevent issues where the video URL might not be immediately available or fetchable. Changing the download mechanism to programmatic click avoids navigation issues with `blob:` URLs.
+> - **Files:**
+>   - `src/app/api/script/generate-video/text/route.ts`
+>   - `src/app/api/script/generate-video/image-direct/route.ts`
+>   - `src/app/api/script/generate-video/image-refs/route.ts`
+>   - `src/app/script/page.tsx`
+
+---
+
 ### ✨ Features
 
 ---
