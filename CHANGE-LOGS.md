@@ -15,6 +15,28 @@
 
 ---
 
+### 💅 UI Improvements
+
+---
+
+> ### Clear Button for Shot Prompts
+>
+> - **What changed:** Added a "Clear" button next to the Prompt label in each shot's detail view. Clicking it instantly empties the prompt textarea. Additionally, added a "Copy" button next to it that copies the current prompt text to the clipboard and shows a green tick animation for 2 seconds. Both buttons also have active click scaling and background darkening states.
+> - **Why:** Makes it much easier to wipe the text area on mobile devices where selecting all text manually can be tedious, allowing users to quickly paste new prompts. The copy button allows for easy duplication of prompts, and the active styling gives immediate physical click feedback.
+> - **Files:**
+>   - `src/app/script/page.tsx`
+
+---
+
+> ### Default Shots Constants Cleaned
+>
+> - **What changed:** Removed all pre-filled `imageRefs` (e.g. `['1']` or `['2']`) from the default `PODCAST_SHOTS` constants.
+> - **Why:** Prevents non-existent image references from showing up by default when loading initial boilerplate or adding new shots.
+> - **Files:**
+>   - `src/app/script/page.tsx`
+
+---
+
 ### ✨ Features
 
 ---

@@ -69,7 +69,7 @@ export const PODCAST_SHOTS = [
     shot_number: 1,
     duration: 8,
     resolution: '720p',
-    imageRefs: ['1'],
+    imageRefs: [],
     prompt: `
 ${VIDEO_STYLE}
 ${CINEMATOGRAPHY_CLOSE}
@@ -113,7 +113,7 @@ No subtitles. No captions. No auto-generated text. No closed captions. No text o
     shot_number: 2,
     duration: 8,
     resolution: '720p',
-    imageRefs: ['1'],
+    imageRefs: [],
     prompt: `
 ${VIDEO_STYLE}
 ${CINEMATOGRAPHY_CLOSE}
@@ -163,7 +163,7 @@ No subtitles. No captions. No text on screen. No music.
     shot_number: 3,
     duration: 8,
     resolution: '720p',
-    imageRefs: ['1'],
+    imageRefs: [],
     prompt: `
 ${VIDEO_STYLE}
 ${CINEMATOGRAPHY_CLOSE}
@@ -210,7 +210,7 @@ No subtitles. No captions. No text on screen. No music.
     shot_number: 4,
     duration: 8,
     resolution: '720p',
-    imageRefs: ['2'],
+    imageRefs: [],
     prompt: `
 ${VIDEO_STYLE}
 ${CINEMATOGRAPHY_CLOSE}
@@ -257,7 +257,7 @@ No subtitles. No captions. No text on screen. No music.
     shot_number: 5,
     duration: 8,
     resolution: '720p',
-    imageRefs: ['1'],
+    imageRefs: [],
     prompt: `
 ${VIDEO_STYLE}
 ${CINEMATOGRAPHY_CLOSE}
@@ -301,7 +301,7 @@ No subtitles. No captions. No text on screen. No music.
     shot_number: 6,
     duration: 8,
     resolution: '720p',
-    imageRefs: ['2'],
+    imageRefs: [],
     prompt: `
 ${VIDEO_STYLE}
 ${CINEMATOGRAPHY_CLOSE}

@@ -60,6 +60,7 @@ export default function ScriptPage() {
   const [shotToDelete, setShotToDelete] = useState<number | null>(null);
   const [isDeletingAllVars, setIsDeletingAllVars] = useState(false);
   const [varToDelete, setVarToDelete] = useState<number | null>(null);
+  const [copiedShotIndex, setCopiedShotIndex] = useState<number | null>(null);
 
   React.useEffect(() => {
     const savedShots = localStorage.getItem('podcast_shots');
@@ -778,9 +779,73 @@ export default function ScriptPage() {
                           </div>
 
                           <div className="w-full box-border">
-                            <label className="field-label break-words">
-                              Prompt
-                            </label>
+                            <div className="flex items-center justify-between mb-2">
+                              <label className="field-label break-words mb-0">
+                                Prompt
+                              </label>
+                              <div className="flex items-center gap-2">
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    if (shot.prompt) {
+                                      navigator.clipboard.writeText(
+                                        shot.prompt
+                                      );
+                                      setCopiedShotIndex(index);
+                                      setTimeout(
+                                        () => setCopiedShotIndex(null),
+                                        2000
+                                      );
+                                    }
+                                  }}
+                                  className="text-xs font-semibold text-slate-500 hover:text-violet-600 bg-slate-100 hover:bg-violet-50 active:bg-violet-100 active:scale-95 px-2 py-1 rounded transition-all flex items-center gap-1.5"
+                                  title="Copy prompt"
+                                >
+                                  {copiedShotIndex === index ? (
+                                    <svg
+                                      className="w-3.5 h-3.5 text-emerald-500 animate-in zoom-in"
+                                      fill="none"
+                                      viewBox="0 0 24 24"
+                                      stroke="currentColor"
+                                      strokeWidth={3}
+                                    >
+                                      <polyline points="20 6 9 17 4 12" />
+                                    </svg>
+                                  ) : (
+                                    <svg
+                                      className="w-3.5 h-3.5"
+                                      fill="none"
+                                      viewBox="0 0 24 24"
+                                      stroke="currentColor"
+                                      strokeWidth={2}
+                                    >
+                                      <rect
+                                        x="9"
+                                        y="9"
+                                        width="13"
+                                        height="13"
+                                        rx="2"
+                                        ry="2"
+                                      />
+                                      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                                    </svg>
+                                  )}
+                                  {copiedShotIndex === index
+                                    ? 'Copied'
+                                    : 'Copy'}
+                                </button>
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    updateShot(index, { prompt: '' });
+                                  }}
+                                  className="text-xs font-semibold text-slate-500 hover:text-slate-700 bg-slate-100 hover:bg-slate-200 active:bg-slate-300 active:scale-95 px-2 py-1 rounded transition-all"
+                                  title="Clear prompt"
+                                >
+                                  Clear
+                                </button>
+                              </div>
+                            </div>
                             <textarea
                               value={shot.prompt}
                               onChange={(e) =>
