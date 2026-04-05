@@ -6,6 +6,15 @@
 
 ---
 
+> ### Prompt Editor Autocomplete & Alignment Fixes
+>
+> - **What changed:** Fixed a visual alignment issue in the Prompt Editor where the highlighted variable tags had extra padding and font-weight, causing the transparent typing layer to misalign with the visual layer and break cursor navigation. Positioned the autocomplete dropdown dynamically to float precisely below the text cursor rather than the bottom of the editor, and added an automatic trailing space when selecting a variable via autocomplete.
+> - **Why:** Ensures the text cursor remains perfectly synced with the visible text, preventing navigation bugs, and provides a much more intuitive, developer-like autocomplete experience.
+> - **Files:**
+>   - `src/components/PromptEditor.tsx`
+
+---
+
 > ### Legacy ImageRefs Cleared on Load
 >
 > - **What changed:** Added logic to automatically strip out legacy `'1'` and `'2'` string values from the `imageRefs` array when loading saved shots from `localStorage`.
@@ -69,6 +78,16 @@
 ---
 
 ### ✨ Features
+
+---
+
+> ### Shot Prompts Global Variables Support
+>
+> - **What changed:** Added a custom `PromptEditor` component for referencing global variables inside shot prompts using `{variableName}` syntax. Variables are formatted in real-time as bold text with a violet halo while typing. Typing `{` triggers an autocomplete dropdown of available global variables with keyboard navigation support. Detected variables are also displayed below the prompt as hoverable pill tags showing a preview of their value. During video generation, these variables are automatically replaced with their respective values before sending to the backend API.
+> - **Why:** Allows users to reuse repetitive text, like character descriptions or stylistic instructions, across multiple shots. Real-time visual formatting and autocomplete make typing complex variables intuitive and error-free without leaving the keyboard.
+> - **Files:**
+>   - `src/app/script/page.tsx`
+>   - `src/components/PromptEditor.tsx`
 
 ---
 

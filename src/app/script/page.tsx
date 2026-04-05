@@ -5,6 +5,7 @@ import Image from 'next/image';
 import * as initialData from './constants';
 import DeviceAwareUpload from '@/components/DeviceAwareUpload';
 import { ConfirmPopup } from '@/components/ConfirmPopup';
+import PromptEditor from '@/components/PromptEditor';
 
 type Shot = {
   shot_number: number;
@@ -874,13 +875,67 @@ export default function ScriptPage() {
                                 </button>
                               </div>
                             </div>
-                            <textarea
+                            <PromptEditor
                               value={shot.prompt}
-                              onChange={(e) =>
-                                updateShot(index, { prompt: e.target.value })
+                              onChange={(val) =>
+                                updateShot(index, { prompt: val })
                               }
-                              className="w-full box-border h-80 bg-white border border-slate-200 rounded-lg p-3 text-sm text-slate-700 shadow-sm focus:outline-none focus:border-violet-500 focus:ring-1 focus:ring-violet-500 break-words"
+                              globals={globals}
+                              placeholder="Write your prompt here. Type { to reference a variable."
                             />
+                            {/* Detected Variables Panel */}
+                            {(() => {
+                              const matches = shot.prompt.match(/\{([^}]+)\}/g);
+                              if (!matches) return null;
+                              const uniqueVars = Array.from(
+                                new Set(matches.map((m) => m.slice(1, -1)))
+                              );
+                              if (uniqueVars.length === 0) return null;
+
+                              return (
+                                <div className="mt-3 p-3 bg-slate-50 border border-slate-200 rounded-lg">
+                                  <div className="text-xs font-semibold text-slate-500 mb-2 uppercase tracking-wider">
+                                    Detected Variables
+                                  </div>
+                                  <div className="flex flex-wrap gap-2">
+                                    {uniqueVars.map((varName, i) => {
+                                      const globalVar = globals.find(
+                                        (g) => g.name === varName
+                                      );
+                                      const isResolved = !!globalVar;
+                                      let previewValue = '';
+                                      if (globalVar) {
+                                        const words = globalVar.value
+                                          .split(/\s+/)
+                                          .filter(Boolean);
+                                        previewValue =
+                                          words.slice(0, 3).join(' ') +
+                                          (words.length > 3 ? '...' : '');
+                                      }
+
+                                      return (
+                                        <div key={i} className="relative group">
+                                          <div
+                                            className={`px-2 py-1 text-xs font-mono rounded cursor-pointer border ${isResolved ? 'bg-violet-50 text-violet-700 border-violet-200 hover:bg-violet-100' : 'bg-red-50 text-red-600 border-red-200'}`}
+                                          >
+                                            {`{${varName}}`}
+                                          </div>
+                                          {isResolved && (
+                                            <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-max max-w-xs bg-slate-800 text-white text-xs px-2.5 py-1.5 rounded shadow-lg opacity-0 pointer-events-none group-hover:opacity-100 transition-opacity z-50">
+                                              <span className="font-semibold text-violet-300">
+                                                {varName}:
+                                              </span>{' '}
+                                              {previewValue}
+                                              <div className="absolute top-full left-1/2 -translate-x-1/2 -mt-1 border-4 border-transparent border-t-slate-800"></div>
+                                            </div>
+                                          )}
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              );
+                            })()}
                           </div>
 
                           <div className="w-full box-border">
@@ -1134,6 +1189,14 @@ export default function ScriptPage() {
                       selectedIndices.map(async (i) => {
                         const shot = shots[i];
                         try {
+                          let finalPrompt = shot.prompt;
+                          globals.forEach((g) => {
+                            finalPrompt = finalPrompt.replace(
+                              new RegExp(`\\{${g.name}\\}`, 'g'),
+                              g.value
+                            );
+                          });
+
                           const res = await fetch(
                             '/api/script/generate-video',
                             {
@@ -1141,7 +1204,7 @@ export default function ScriptPage() {
                               headers: { 'Content-Type': 'application/json' },
                               signal: controller.signal,
                               body: JSON.stringify({
-                                prompt: shot.prompt,
+                                prompt: finalPrompt,
                                 modelName: model,
                                 duration: shot.duration,
                                 resolution: shot.resolution,
