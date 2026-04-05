@@ -19,7 +19,7 @@ function resolveOutputPath(shotNumber: number | undefined): {
   if (shotNumber) {
     let counter = 1;
     while (fs.existsSync(outputPath)) {
-      outputFilename = `shot_${shotNumber} (${counter}).mp4`;
+      outputFilename = `shot_${shotNumber}_(${counter}).mp4`;
       outputPath = path.join(
         process.cwd(),
         'public',

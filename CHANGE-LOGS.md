@@ -254,6 +254,25 @@
 
 ---
 
+### 🐛 Fixes
+
+---
+
+> ### Generated Video Filenames — Spaces Replaced with Underscores
+>
+> - **What changed:** Duplicate video filenames now use underscores instead of spaces in the counter suffix — `shot_1_(2).mp4` instead of `shot_1 (2).mp4`. Applied to all three generation routes.
+> - **Why:** Filenames with spaces become URL-encoded (`shot_1%20(2).mp4`) when served statically. Next.js couldn't match the encoded URL to the file on disk, causing 404s for any shot that had already been generated once.
+> - **Files:**
+>   - `src/app/api/script/generate-video/text/route.ts`
+>   - `src/app/api/script/generate-video/image-direct/route.ts`
+>   - `src/app/api/script/generate-video/image-refs/route.ts`
+
+---
+
+### ✨ Features
+
+---
+
 > ### Three-Route Video Generation Architecture
 >
 > - **What changed:** The single hybrid `/api/script/generate-video` route was replaced with three purpose-built routes, each with a clean input contract matching a distinct Veo API call shape:
