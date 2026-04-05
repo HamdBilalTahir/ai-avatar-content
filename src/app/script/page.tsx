@@ -361,7 +361,7 @@ export default function ScriptPage() {
                               }
                               return `${g.name}=${g.value}`;
                             })
-                            .join('\n');
+                            .join('\n\n');
                           setBulkText(text);
                           setIsBulkEditing(true);
                         }}
@@ -474,36 +474,40 @@ export default function ScriptPage() {
 
                             for (let i = 0; i < lines.length; i++) {
                               const line = lines[i];
-                              if (!inBlock && line.includes('="""')) {
-                                const parts = line.split('="""');
-                                currentKey = parts[0].trim();
-                                currentValue = parts[1] || '';
-                                inBlock = true;
+                              // Match KEY = """... or KEY="""... (spaces around = are optional)
+                              const tripleMatch =
+                                !inBlock &&
+                                line.match(/^([^=]+?)\s*=\s*"""(.*)/);
+                              if (tripleMatch) {
+                                currentKey = tripleMatch[1].trim();
+                                currentValue = tripleMatch[2] || '';
+                                // Single-line triple-quoted: KEY = """value"""
                                 if (currentValue.endsWith('"""')) {
                                   currentValue = currentValue.slice(0, -3);
                                   newGlobals.push({
                                     name: currentKey,
-                                    value: currentValue,
+                                    value: currentValue.trim(),
                                   });
-                                  inBlock = false;
+                                } else {
+                                  inBlock = true;
                                 }
                               } else if (inBlock) {
                                 if (line.endsWith('"""')) {
                                   currentValue += '\n' + line.slice(0, -3);
                                   newGlobals.push({
                                     name: currentKey,
-                                    value: currentValue,
+                                    value: currentValue.trim(),
                                   });
                                   inBlock = false;
                                 } else {
                                   currentValue += '\n' + line;
                                 }
-                              } else if (line.includes('=')) {
-                                const [k, ...v] = line.split('=');
-                                newGlobals.push({
-                                  name: k.trim(),
-                                  value: v.join('=').trim(),
-                                });
+                              } else if (!inBlock && line.includes('=')) {
+                                const eqIdx = line.indexOf('=');
+                                const k = line.slice(0, eqIdx).trim();
+                                let val = line.slice(eqIdx + 1).trim();
+                                val = val.replace(/^"{3}|"{3}$/g, '').trim();
+                                if (k) newGlobals.push({ name: k, value: val });
                               }
                             }
                           }
@@ -789,7 +793,11 @@ export default function ScriptPage() {
                       const cleaned: Partial<Shot> = {};
                       for (const key of Object.keys(raw)) {
                         if (VALID_KEYS.has(key)) {
-                          (cleaned as Record<string, unknown>)[key] = raw[key];
+                          let val = raw[key];
+                          if (key === 'prompt' && typeof val === 'string') {
+                            val = val.replace(/^"{3}|"{3}$/g, '').trim();
+                          }
+                          (cleaned as Record<string, unknown>)[key] = val;
                         } else {
                           discardedKeys.add(key);
                         }

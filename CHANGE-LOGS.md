@@ -1,3 +1,38 @@
+## 🗓️ **2026-04-06**
+
+---
+
+### 🐛 Fixes
+
+---
+
+> ### Globals Bulk Edit — Triple-Quote Parser Handles Spaces & Multiline Correctly
+>
+> - **What changed:** Rewrote the globals bulk edit parser to use a regex (`/^([^=]+?)\s*=\s*"""/`) instead of a plain string split on `="""`. This correctly handles all spacing variants around the `=` sign (`KEY="""`, `KEY = """`, `KEY= """`, `KEY ="""`) and properly captures multi-line values that span many paragraphs. Triple quotes are stripped from the saved value — only the raw content is stored.
+> - **Why:** When users pasted globals with a space before `"""` (e.g. `VEO_SUBJECT_WORKERS = """...`), the parser failed to enter block mode and only captured the first line, silently discarding everything after it.
+> - **Files:**
+>   - `src/app/script/page.tsx`
+
+---
+
+> ### Globals Bulk Edit — Line Break Between Variables on Open
+>
+> - **What changed:** When opening Globals Bulk Edit, each variable is now separated by a blank line (`\n\n` instead of `\n`), making the textarea much easier to read and edit when variables have long values.
+> - **Why:** Without the gap, long multi-line values ran into the next variable key with no visual separation.
+> - **Files:**
+>   - `src/app/script/page.tsx`
+
+---
+
+> ### Globals & Shots Bulk Edit — Triple Quotes Stripped on Save
+>
+> - **What changed:** When saving bulk edits, any leading or trailing `"""` are now stripped from global values and shot prompt fields before storing. Works whether the quotes are present or not.
+> - **Why:** Users copy-paste values wrapped in triple quotes from their notes or constants files. These decorators should be transparent — only the content matters.
+> - **Files:**
+>   - `src/app/script/page.tsx`
+
+---
+
 ## 🗓️ **2026-04-05**
 
 ---
