@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import Image from 'next/image';
 import * as initialData from './constants';
 import DeviceAwareUpload from '@/components/DeviceAwareUpload';
@@ -61,6 +61,31 @@ export default function ScriptPage() {
   const [isDeletingAllVars, setIsDeletingAllVars] = useState(false);
   const [varToDelete, setVarToDelete] = useState<number | null>(null);
   const [copiedShotIndex, setCopiedShotIndex] = useState<number | null>(null);
+  const [imageLibraryModalShotIndex, setImageLibraryModalShotIndex] = useState<
+    number | null
+  >(null);
+  const [selectedLibraryImages, setSelectedLibraryImages] = useState<string[]>(
+    []
+  );
+  const [imageToDelete, setImageToDelete] = useState<string | null>(null);
+  const [videoToDelete, setVideoToDelete] = useState<{
+    shotIndex: number;
+    urlIndex: number;
+    url: string;
+  } | null>(null);
+
+  const generatedMediaRef = useRef<HTMLDivElement>(null);
+
+  React.useEffect(() => {
+    if (recentSuccessUrls.length > 0 && window.innerWidth < 1024) {
+      setTimeout(() => {
+        generatedMediaRef.current?.scrollIntoView({
+          behavior: 'smooth',
+          block: 'start',
+        });
+      }, 100);
+    }
+  }, [recentSuccessUrls]);
 
   React.useEffect(() => {
     const savedShots = localStorage.getItem('podcast_shots');
@@ -859,8 +884,11 @@ export default function ScriptPage() {
                           </div>
 
                           <div className="w-full box-border">
-                            <label className="field-label break-words">
+                            <label className="field-label break-words flex items-center gap-2">
                               Attached Images
+                              <span className="text-xs font-normal text-slate-400 normal-case tracking-normal">
+                                {shot.imageRefs.length}/3 max
+                              </span>
                             </label>
                             <div className="flex flex-wrap gap-2 max-w-full overflow-hidden">
                               {shot.imageRefs.map((refId, i) => {
@@ -886,14 +914,16 @@ export default function ScriptPage() {
                                       </div>
                                     )}
                                     <button
-                                      onClick={() => {
+                                      onClick={(e) => {
+                                        e.stopPropagation();
                                         const newRefs = [...shot.imageRefs];
                                         newRefs.splice(i, 1);
                                         updateShot(index, {
                                           imageRefs: newRefs,
                                         });
                                       }}
-                                      className="absolute top-0 right-0 bg-red-500 text-white w-5 h-5 flex items-center justify-center text-xs opacity-0 group-hover:opacity-100 transition-opacity"
+                                      className="absolute top-0 right-0 bg-slate-900/60 hover:bg-red-500 backdrop-blur-sm text-white w-6 h-6 flex items-center justify-center text-sm rounded-bl-lg transition-colors z-10"
+                                      title="Remove image"
                                     >
                                       ×
                                     </button>
@@ -901,34 +931,53 @@ export default function ScriptPage() {
                                 );
                               })}
 
-                              <DeviceAwareUpload
-                                onUpload={(files) => {
-                                  const newImages = files.map((file) => ({
-                                    id: Math.random().toString(36).substring(7),
-                                    file,
-                                    previewUrl: URL.createObjectURL(file),
-                                  }));
-                                  setImages((prev) => [...prev, ...newImages]);
-                                  updateShot(index, {
-                                    imageRefs: [
-                                      ...shot.imageRefs,
-                                      ...newImages.map((img) => img.id),
-                                    ],
-                                  });
-                                }}
-                                onOpenLibrary={() => setIsLibraryExpanded(true)}
-                                hasLibraryImages={images.length > 0}
-                              >
-                                <div className="w-16 h-16 flex flex-col items-center justify-center rounded-lg border-2 border-dashed border-slate-200 cursor-pointer hover:border-violet-400 hover:bg-violet-50 transition-colors text-slate-400 hover:text-violet-600 bg-white">
-                                  <span className="text-xl leading-none">
-                                    +
-                                  </span>
-                                </div>
-                              </DeviceAwareUpload>
+                              {shot.imageRefs.length < 3 && (
+                                <DeviceAwareUpload
+                                  onUpload={(files) => {
+                                    const newImages = files.map((file) => ({
+                                      id: Math.random()
+                                        .toString(36)
+                                        .substring(7),
+                                      file,
+                                      previewUrl: URL.createObjectURL(file),
+                                    }));
+                                    setImages((prev) => [
+                                      ...prev,
+                                      ...newImages,
+                                    ]);
+
+                                    // ensure we don't exceed 3
+                                    const availableSlots =
+                                      3 - shot.imageRefs.length;
+                                    const idsToAdd = newImages
+                                      .map((img) => img.id)
+                                      .slice(0, availableSlots);
+
+                                    updateShot(index, {
+                                      imageRefs: [
+                                        ...shot.imageRefs,
+                                        ...idsToAdd,
+                                      ],
+                                    });
+                                  }}
+                                  onOpenLibrary={() => {
+                                    setImageLibraryModalShotIndex(index);
+                                    setSelectedLibraryImages([]);
+                                  }}
+                                  hasLibraryImages={images.length > 0}
+                                >
+                                  <div className="w-16 h-16 flex flex-col items-center justify-center rounded-lg border-2 border-dashed border-slate-200 cursor-pointer hover:border-violet-400 hover:bg-violet-50 transition-colors text-slate-400 hover:text-violet-600 bg-white">
+                                    <span className="text-xl leading-none">
+                                      +
+                                    </span>
+                                  </div>
+                                </DeviceAwareUpload>
+                              )}
                             </div>
                             <div className="mt-2 text-[11px] text-slate-400">
                               Click the + button to upload and attach directly,
-                              or click an image in the library.
+                              or click an image in the library. Max 3 images per
+                              shot.
                             </div>
                           </div>
                         </div>
@@ -1289,9 +1338,19 @@ export default function ScriptPage() {
                       unoptimized
                       className="object-cover"
                     />
-                    <div className="absolute inset-0 bg-slate-900/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-xs font-semibold text-white text-center p-1">
+                    <div className="absolute inset-0 bg-slate-900/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-xs font-semibold text-white text-center p-1 pointer-events-none">
                       Attach to Shot
                     </div>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setImageToDelete(img.id);
+                      }}
+                      className="absolute top-0 right-0 bg-slate-900/60 hover:bg-red-500 backdrop-blur-sm text-white w-6 h-6 flex items-center justify-center text-sm rounded-bl-lg transition-colors z-10"
+                      title="Delete from Library"
+                    >
+                      ×
+                    </button>
                   </div>
                 ))}
               </div>
@@ -1300,7 +1359,10 @@ export default function ScriptPage() {
 
         {/* Generated Media (Stacked in a grid) */}
         {/* Generated Media (Stacked in a grid) */}
-        <div className="p-4 lg:p-6 flex-1 min-h-0 flex flex-col pb-20 lg:pb-6 transition-all min-h-[50vh] lg:min-h-0">
+        <div
+          ref={generatedMediaRef}
+          className="p-4 lg:p-6 flex-1 min-h-0 flex flex-col pb-20 lg:pb-6 transition-all min-h-[50vh] lg:min-h-0 scroll-mt-6"
+        >
           <div
             className="flex items-center justify-between mb-4 cursor-pointer"
             onClick={() => setIsMediaExpanded(!isMediaExpanded)}
@@ -1352,15 +1414,30 @@ export default function ScriptPage() {
                               Shot {shot.shot_number}
                               {versionLabel}
                             </span>
-                            <a
-                              href={url}
-                              download={`Shot_${shot.shot_number}${versionLabel}.mp4`}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="text-xs text-violet-600 hover:text-violet-700 font-medium"
-                            >
-                              Download
-                            </a>
+                            <div className="flex items-center gap-2">
+                              <a
+                                href={url}
+                                download={`Shot_${shot.shot_number}${versionLabel}.mp4`}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-xs text-violet-600 hover:text-violet-700 font-medium"
+                              >
+                                Download
+                              </a>
+                              <button
+                                onClick={() =>
+                                  setVideoToDelete({
+                                    shotIndex: i,
+                                    urlIndex: i,
+                                    url,
+                                  })
+                                }
+                                className="text-slate-400 hover:text-red-500 transition-colors px-1"
+                                title="Delete video"
+                              >
+                                ×
+                              </button>
+                            </div>
                           </div>
                           <div
                             className="relative w-full rounded-lg bg-slate-900 aspect-video cursor-pointer overflow-hidden group"
@@ -1560,6 +1637,185 @@ export default function ScriptPage() {
         }}
         onCancel={() => setVarToDelete(null)}
       />
+
+      <ConfirmPopup
+        isOpen={imageToDelete !== null}
+        title="Delete Image"
+        message="Are you sure you want to permanently delete this image from your library?"
+        onConfirm={() => {
+          if (imageToDelete) {
+            setImages((prev) => prev.filter((img) => img.id !== imageToDelete));
+            // Also optionally remove from shot attachments
+            setShots((prev) =>
+              prev.map((s) => ({
+                ...s,
+                imageRefs: s.imageRefs.filter((ref) => ref !== imageToDelete),
+              }))
+            );
+            setImageToDelete(null);
+          }
+        }}
+        onCancel={() => setImageToDelete(null)}
+      />
+
+      <ConfirmPopup
+        isOpen={videoToDelete !== null}
+        title="Delete Video"
+        message="Are you sure you want to remove this video from your generated media?"
+        onConfirm={() => {
+          if (videoToDelete !== null) {
+            const { shotIndex, url } = videoToDelete;
+            setShots((prev) => {
+              const newShots = [...prev];
+              const targetShot = newShots[shotIndex];
+              if (targetShot && targetShot.generatedVideoUrls) {
+                targetShot.generatedVideoUrls =
+                  targetShot.generatedVideoUrls.filter((u) => u !== url);
+                if (targetShot.generatedVideoUrl === url) {
+                  targetShot.generatedVideoUrl =
+                    targetShot.generatedVideoUrls[
+                      targetShot.generatedVideoUrls.length - 1
+                    ] || undefined;
+                }
+                if (targetShot.generatedVideoUrls.length === 0) {
+                  targetShot.status = 'idle';
+                }
+              }
+              return newShots;
+            });
+            setVideoToDelete(null);
+          }
+        }}
+        onCancel={() => setVideoToDelete(null)}
+      />
+
+      {/* Image Library Modal */}
+      {imageLibraryModalShotIndex !== null && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-3xl max-h-[90vh] overflow-hidden flex flex-col">
+            <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-white z-10">
+              <h3 className="font-bold text-slate-800">
+                Select Images for Shot{' '}
+                {shots[imageLibraryModalShotIndex]?.shot_number}
+              </h3>
+              <button
+                onClick={() => setImageLibraryModalShotIndex(null)}
+                className="text-slate-400 hover:text-slate-600 px-2 text-xl"
+              >
+                ×
+              </button>
+            </div>
+            <div className="p-6 overflow-y-auto flex-1">
+              {images.length === 0 ? (
+                <div className="text-center text-slate-500 py-8">
+                  Your library is empty. Please upload some images first.
+                </div>
+              ) : (
+                <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-4">
+                  {images.map((img) => {
+                    const isSelected = selectedLibraryImages.includes(img.id);
+                    const isAlreadyAttached = shots[
+                      imageLibraryModalShotIndex
+                    ]?.imageRefs.includes(img.id);
+                    const currentAttachedCount =
+                      shots[imageLibraryModalShotIndex]?.imageRefs.length || 0;
+                    const canSelect =
+                      isSelected ||
+                      selectedLibraryImages.length + currentAttachedCount < 3;
+
+                    return (
+                      <div
+                        key={img.id}
+                        className={`relative group aspect-square rounded-lg border overflow-hidden cursor-pointer transition-all shadow-sm ${
+                          isAlreadyAttached
+                            ? 'opacity-50 grayscale cursor-not-allowed border-slate-200'
+                            : isSelected
+                              ? 'border-violet-500 ring-2 ring-violet-500'
+                              : canSelect
+                                ? 'border-slate-200 hover:border-violet-400 hover:ring-1 hover:ring-violet-400'
+                                : 'opacity-50 cursor-not-allowed border-slate-200'
+                        }`}
+                        onClick={() => {
+                          if (isAlreadyAttached) return;
+                          if (isSelected) {
+                            setSelectedLibraryImages((prev) =>
+                              prev.filter((id) => id !== img.id)
+                            );
+                          } else if (canSelect) {
+                            setSelectedLibraryImages((prev) => [
+                              ...prev,
+                              img.id,
+                            ]);
+                          }
+                        }}
+                      >
+                        <Image
+                          src={img.previewUrl}
+                          alt="Library Item"
+                          fill
+                          unoptimized
+                          className="object-cover"
+                        />
+                        {isSelected && (
+                          <div className="absolute top-2 right-2 w-6 h-6 bg-violet-500 text-white rounded-full flex items-center justify-center z-10 shadow-sm">
+                            <svg
+                              className="w-4 h-4"
+                              fill="none"
+                              viewBox="0 0 24 24"
+                              stroke="currentColor"
+                              strokeWidth={3}
+                            >
+                              <polyline points="20 6 9 17 4 12" />
+                            </svg>
+                          </div>
+                        )}
+                        {isAlreadyAttached && (
+                          <div className="absolute inset-0 bg-slate-900/60 flex items-center justify-center text-xs font-semibold text-white text-center p-1">
+                            Already Attached
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+            <div className="p-4 border-t border-slate-100 bg-slate-50 flex items-center justify-between z-10 shrink-0">
+              <div className="text-sm text-slate-500">
+                {selectedLibraryImages.length} selected (max{' '}
+                {3 - (shots[imageLibraryModalShotIndex]?.imageRefs.length || 0)}{' '}
+                more allowed)
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setImageLibraryModalShotIndex(null)}
+                  className="px-4 py-2 text-slate-600 hover:text-slate-800 text-sm font-medium transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  disabled={selectedLibraryImages.length === 0}
+                  onClick={() => {
+                    const shot = shots[imageLibraryModalShotIndex];
+                    if (shot) {
+                      updateShot(imageLibraryModalShotIndex, {
+                        imageRefs: [
+                          ...shot.imageRefs,
+                          ...selectedLibraryImages,
+                        ],
+                      });
+                    }
+                    setImageLibraryModalShotIndex(null);
+                  }}
+                  className="px-4 py-2 bg-violet-600 hover:bg-violet-700 text-white text-sm font-medium rounded-lg transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Attach Selected
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* API Key Modal */}
       {isApiPopupOpen && (

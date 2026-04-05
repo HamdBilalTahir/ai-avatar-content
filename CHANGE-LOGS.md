@@ -46,7 +46,50 @@
 
 ---
 
+### 💅 UI Improvements
+
+---
+
+> ### Mobile Generated Media Scroll
+>
+> - **What changed:** When generating a video on mobile devices (viewport width < 1024px), the screen now automatically scrolls down to the "Generated Media" section once the generation succeeds.
+> - **Why:** Prevents the user from having to manually scroll down to find their newly generated video, improving the mobile UX.
+> - **Files:**
+>   - `src/app/script/page.tsx`
+
+---
+
+> ### Mobile Avatar Generation Scroll
+>
+> - **What changed:** When generating an avatar on mobile devices (viewport width < 768px), the screen now automatically scrolls smoothly down to the image preview container once the generation is complete and the image appears.
+> - **Why:** In the mobile single-column layout, the generated image appears far below the generation button. Users previously had to manually scroll down to see the result, which felt disconnected. Auto-scrolling immediately reveals the success state.
+> - **Files:**
+>   - `src/app/avatar/new/page.tsx`
+
+---
+
 ### ✨ Features
+
+---
+
+> ### Image Library Multi-Select Modal & Media Deletion
+>
+> - **What changed:**
+>   1. Selecting "Image Library" when attaching an image to a shot now opens a dedicated popup modal instead of just expanding the right sidebar. This modal allows multi-selecting images to attach all at once, while enforcing the 3-image limit.
+>   2. Images in the global Image Library can now be deleted via an '×' button, which prompts a confirmation dialog. Deleting an image also removes it from any shots it was attached to.
+>   3. Generated videos in the global Generated Media list can now be deleted, also prompting a confirmation dialog before removal.
+> - **Why:** Improves workflow speed by allowing bulk attachment of library images directly from the shot card. Adds necessary media management features so users can clean up their workspace and remove unwanted files safely.
+> - **Files:**
+>   - `src/app/script/page.tsx`
+
+---
+
+> ### Mobile-Friendly Image Removal & Limit
+>
+> - **What changed:** The 'remove' (`×`) button on attached images in a shot is now constantly visible with a dark backdrop (instead of requiring hover), and a strict limit of 3 images per shot has been enforced. When the limit is reached, the "Upload" button is hidden.
+> - **Why:** Hover-only actions are inaccessible on touch devices, making it impossible for mobile users to delete attachments. Enforcing a 3-image limit ensures stable performance and adherence to backend API constraints.
+> - **Files:**
+>   - `src/app/script/page.tsx`
 
 ---
 

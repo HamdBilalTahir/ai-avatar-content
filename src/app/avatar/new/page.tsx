@@ -79,6 +79,8 @@ export default function AvatarNewPage() {
   const [isKeyCopied, setIsKeyCopied] = useState(false);
   const [lightboxOpen, setLightboxOpen] = useState(false);
 
+  const imageContainerRef = useRef<HTMLDivElement>(null);
+
   const [selectedVoiceId, setSelectedVoiceId] = useState<string>(
     VOICE_PRESETS[0].id
   );
@@ -148,6 +150,17 @@ export default function AvatarNewPage() {
       // Corrupt storage — ignore and start fresh
     }
   }, []);
+
+  useEffect(() => {
+    if (imageBase64 && generationCount > 0 && window.innerWidth < 768) {
+      setTimeout(() => {
+        imageContainerRef.current?.scrollIntoView({
+          behavior: 'smooth',
+          block: 'start',
+        });
+      }, 100);
+    }
+  }, [imageBase64, generationCount]);
 
   // ── Persist draft to localStorage whenever state changes ───────────────────
   useEffect(() => {
@@ -1256,7 +1269,10 @@ export default function AvatarNewPage() {
           </div>
 
           {/* Right column — preview, sticky on desktop */}
-          <div className="w-full md:w-[400px] md:flex-shrink-0 md:sticky md:top-6 flex flex-col gap-4 mt-6 md:mt-0">
+          <div
+            ref={imageContainerRef}
+            className="w-full md:w-[400px] md:flex-shrink-0 md:sticky md:top-6 flex flex-col gap-4 mt-6 md:mt-0 scroll-mt-6"
+          >
             {/* Preview box */}
             <div
               className="relative w-full rounded-2xl overflow-hidden border border-slate-200 bg-white shadow-sm"
