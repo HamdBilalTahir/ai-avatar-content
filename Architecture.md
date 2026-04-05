@@ -10,63 +10,56 @@
 2. [Technology Stack](#2-technology-stack)
 3. [High-Level Architecture Diagram](#3-high-level-architecture-diagram)
 4. [Project Structure](#4-project-structure)
-5. [Pipeline Flow](#5-pipeline-flow)
+5. [Pages & Features](#5-pages--features)
 6. [Rendering & Routing Architecture](#6-rendering--routing-architecture)
-7. [Data Layer — Upstash Redis](#7-data-layer--upstash-redis)
+7. [Data Layer](#7-data-layer)
 8. [TypeScript Types](#8-typescript-types)
 9. [API Layer](#9-api-layer)
 10. [Services Layer](#10-services-layer)
-11. [Styling System](#11-styling-system)
-12. [TypeScript Configuration](#12-typescript-configuration)
-13. [Testing Architecture](#13-testing-architecture)
-14. [Code Quality & Pre-commit Pipeline](#14-code-quality--pre-commit-pipeline)
-15. [Build & Toolchain](#15-build--toolchain)
-16. [Environment Configuration](#16-environment-configuration)
-17. [Local Storage](#17-local-storage)
-18. [CI/CD](#18-cicd)
-19. [Developer Workflow](#19-developer-workflow)
+11. [Components](#11-components)
+12. [Styling System](#12-styling-system)
+13. [TypeScript Configuration](#13-typescript-configuration)
+14. [Testing Architecture](#14-testing-architecture)
+15. [Code Quality & Pre-commit Pipeline](#15-code-quality--pre-commit-pipeline)
+16. [Build & Toolchain](#16-build--toolchain)
+17. [Environment Configuration](#17-environment-configuration)
+18. [Local Storage & Generated Files](#18-local-storage--generated-files)
+19. [CI/CD](#19-cicd)
+20. [Developer Workflow](#20-developer-workflow)
 
 ---
 
 ## 1. System Overview
 
-This app generates short AI-presented videos end-to-end from a text topic. The user describes an avatar face, approves the generated image, provides a topic, and the system autonomously generates a script, synthesises speech, and lip-syncs the avatar — producing a ready-to-watch video.
+The app has three distinct product areas accessible via a left sidebar:
+
+| Area            | Route          | Purpose                                                                                       |
+| --------------- | -------------- | --------------------------------------------------------------------------------------------- |
+| **Avatar**      | `/avatar/new`  | Generate an AI avatar face image using Gemini; push to library                                |
+| **Script**      | `/script`      | Write, manage and generate video shots; attach reference images; trigger Veo video generation |
+| **Video Maker** | `/video-maker` | Browser-based NLE editor — arrange video/audio clips on a timeline and export via ffmpeg      |
 
 ### Build Status
 
-| Area                 | Status  | Details                                                  |
-| -------------------- | ------- | -------------------------------------------------------- |
-| Framework            | ✅ Done | Next.js 16 App Router + React 19                         |
-| Language             | ✅ Done | TypeScript strict mode                                   |
-| Styling              | ✅ Done | Tailwind CSS v4                                          |
-| Linting / Formatting | ✅ Done | ESLint 9 + Prettier                                      |
-| Testing              | ✅ Done | Jest 30 + React Testing Library                          |
-| Git Hooks            | ✅ Done | Husky + lint-staged                                      |
-| Shared Types         | ✅ Done | `src/lib/types.ts`                                       |
-| Redis / Job State    | ✅ Done | Upstash Redis via `src/lib/redis.ts` + `src/lib/jobs.ts` |
-| Avatar Generation    | ✅ Done | Gemini image API + `/api/avatar/generate` + avatar page  |
-| Script Generation    | 🔲 TBD  | Gemini via LangChain                                     |
-| TTS                  | 🔲 TBD  | Cartesia                                                 |
-| Lip Sync             | 🔲 TBD  | Sync.so                                                  |
-| Pipeline Status Page | 🔲 TBD  | Polling UI at `/pipeline/[id]`                           |
-| Video Serving        | 🔲 TBD  | `/api/storage/[id]/video`                                |
-| Webhook Handler      | 🔲 TBD  | `/api/webhooks/syncso`                                   |
-| CI/CD                | 🔲 TBD  | —                                                        |
-
-### Core Architectural Characteristics
-
-| Property          | Value                                                          |
-| ----------------- | -------------------------------------------------------------- |
-| Rendering         | Next.js App Router (RSC-first, client components where needed) |
-| Package Manager   | Yarn                                                           |
-| Language          | TypeScript (strict)                                            |
-| CSS Engine        | Tailwind CSS v4 via PostCSS                                    |
-| Testing           | Jest 30 + jsdom + Testing Library                              |
-| Compiler          | Babel + React Compiler (auto-memoization)                      |
-| Path Alias        | `@/*` → `./src/*`                                              |
-| Job State Store   | Upstash Redis (HTTP-based, serverless-safe)                    |
-| File Storage      | Local filesystem under `./storage/{job_id}/`                   |
-| Deployment Target | Vercel (default), any Node.js host                             |
+| Area                 | Status  | Details                                                             |
+| -------------------- | ------- | ------------------------------------------------------------------- |
+| Framework            | ✅ Done | Next.js 16 App Router + React 19                                    |
+| Language             | ✅ Done | TypeScript strict mode                                              |
+| Styling              | ✅ Done | Tailwind CSS v4                                                     |
+| Linting / Formatting | ✅ Done | ESLint 9 + Prettier                                                 |
+| Testing              | ✅ Done | Jest 30 + React Testing Library                                     |
+| Git Hooks            | ✅ Done | Husky + lint-staged                                                 |
+| Shared Types         | ✅ Done | `src/lib/types.ts`                                                  |
+| Redis / Job State    | ✅ Done | Upstash Redis via `src/lib/redis.ts` + `src/lib/jobs.ts`            |
+| Avatar Generation    | ✅ Done | Gemini image API (`@google/generative-ai`) + `/api/avatar/generate` |
+| Script Page          | ✅ Done | Shot editor, global vars, bulk edit, image refs, Veo generation     |
+| Veo Video Generation | ✅ Done | `@google/genai` → Veo 3.1 + reference images per shot               |
+| Script AI Generation | ✅ Done | Gemini via LangChain → `/api/script/generate`                       |
+| Video Maker          | ✅ Done | Browser NLE with timeline, clip trimming, ffmpeg export             |
+| TTS / Voice          | 🔲 TBD  | Cartesia                                                            |
+| Lip Sync             | 🔲 TBD  | Sync.so / SkyReels (Gradio)                                         |
+| Pipeline Status Page | 🔲 TBD  | Polling UI at `/pipeline/[id]`                                      |
+| CI/CD                | 🔲 TBD  | —                                                                   |
 
 ---
 
@@ -85,10 +78,12 @@ This app generates short AI-presented videos end-to-end from a text topic. The u
 
 | Layer             | Technology                | Version | Purpose                                        |
 | ----------------- | ------------------------- | ------- | ---------------------------------------------- |
-| Image Generation  | `@google/generative-ai`   | ^0.24.1 | Gemini avatar image generation (used directly) |
+| Video Generation  | `@google/genai`           | ^1.48.0 | Veo 3.1 video generation + reference images    |
+| Image Generation  | `@google/generative-ai`   | ^0.24.1 | Gemini avatar image generation                 |
 | Script Generation | `@langchain/google-genai` | ^2.1.25 | Gemini script generation via LangChain         |
 | LangChain Core    | `@langchain/core`         | ^1.1.32 | Required peer for LangChain integrations       |
-| Text-to-Speech    | `@cartesia/cartesia-js`   | ^3.0.0  | Cartesia TTS SDK                               |
+| Text-to-Speech    | `@cartesia/cartesia-js`   | ^3.0.0  | Cartesia TTS SDK (integrated, not fully wired) |
+| Lip Sync (Gradio) | `@gradio/client`          | ^2.1.0  | SkyReels Gradio API for talking-head lip sync  |
 
 ### Infrastructure & Data
 
@@ -100,10 +95,11 @@ This app generates short AI-presented videos end-to-end from a text topic. The u
 
 ### Utilities
 
-| Layer         | Technology    | Version | Purpose                         |
-| ------------- | ------------- | ------- | ------------------------------- |
-| ID Generation | `uuid`        | ^13.0.0 | Unique job IDs                  |
-| UUID Types    | `@types/uuid` | ^11.0.0 | TypeScript types for uuid (dev) |
+| Layer         | Technology    | Version  | Purpose                             |
+| ------------- | ------------- | -------- | ----------------------------------- |
+| ID Generation | `uuid`        | ^13.0.0  | Unique job IDs                      |
+| UUID Types    | `@types/uuid` | ^11.0.0  | TypeScript types for uuid (dev)     |
+| Audio DSP     | `tone`        | ^15.1.22 | Pitch shift / formant for voice tab |
 
 ### Styling
 
@@ -137,59 +133,68 @@ This app generates short AI-presented videos end-to-end from a text topic. The u
 ## 3. High-Level Architecture Diagram
 
 ```
-┌──────────────────────────────────────────────────────────────────────┐
-│                              BROWSER                                  │
-│                                                                       │
-│   /avatar/new           (client component — avatar creation page)     │
-│   /pipeline/[id]        (client component — status + video output)    │
-└─────────────────────────────────┬────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────┐
+│                                BROWSER                                    │
+│                                                                           │
+│  /avatar/new      — avatar creation (Gemini image)                        │
+│  /script          — shot editor + Veo video generation                    │
+│  /video-maker     — browser NLE timeline editor                           │
+│  /pipeline/[id]   — pipeline status polling (TBD)                         │
+└─────────────────────────────────┬────────────────────────────────────────┘
                                   │ HTTP / fetch
-┌─────────────────────────────────▼────────────────────────────────────┐
-│                    NEXT.JS SERVER  (Vercel Serverless)                │
-│                                                                       │
-│  ┌──────────────────────────────────────────────────────────────┐    │
-│  │                        API Routes                             │    │
-│  │                                                               │    │
-│  │  POST /api/avatar/generate      → Gemini image generation     │    │
-│  │  POST /api/pipeline/create      → Create job, start pipeline  │    │
-│  │  GET  /api/pipeline/[id]        → Poll job status             │    │
-│  │  GET  /api/storage/[id]/video   → Serve final video file      │    │
-│  │  POST /api/webhooks/syncso      → Sync.so completion callback │    │
-│  └──────────────────────────────────────────────────────────────┘    │
-│                                                                       │
-│  ┌──────────────────────────────────────────────────────────────┐    │
-│  │                      Services Layer                           │    │
-│  │                                                               │    │
-│  │  services/gemini-image.ts   → Avatar image via Gemini API     │    │
-│  │  services/gemini-script.ts  → Script text via LangChain       │    │
-│  │  services/cartesia.ts       → Audio file via Cartesia TTS     │    │
-│  │  services/syncso.ts         → Lip sync job via Sync.so        │    │
-│  └──────────────────────────────────────────────────────────────┘    │
-│                                                                       │
-│  ┌──────────────────────────────────────────────────────────────┐    │
-│  │                        lib Layer                              │    │
-│  │                                                               │    │
-│  │  lib/redis.ts    → Upstash Redis singleton                    │    │
-│  │  lib/jobs.ts     → createJob / getJob / updateJob / getAvatar │    │
-│  │  lib/types.ts    → Shared TypeScript interfaces               │    │
-│  └──────────────────────────────────────────────────────────────┘    │
-└──────────┬─────────────────────────────┬────────────────────────────┘
-           │                             │
-┌──────────▼──────────┐     ┌────────────▼──────────────────────────┐
-│   Upstash Redis      │     │          External AI APIs              │
-│                      │     │                                        │
-│  job:{id}  → JSON    │     │  Google AI Studio  (Gemini image+text) │
-│  avatar:{id} → b64   │     │  Cartesia          (TTS audio)         │
-│  syncso:{id} → jobId │     │  Sync.so           (lip sync video)    │
-└──────────────────────┘     └────────────────────────────────────────┘
-           │
-┌──────────▼──────────┐
-│   Local Filesystem   │
-│  ./storage/{job_id}/ │
-│    avatar.png        │
-│    audio.wav         │
-│    video.mp4         │
-└──────────────────────┘
+┌─────────────────────────────────▼────────────────────────────────────────┐
+│                      NEXT.JS SERVER  (Vercel / Node.js)                   │
+│                                                                           │
+│  ┌─────────────────────────────────────────────────────────────────┐     │
+│  │                          API Routes                              │     │
+│  │                                                                  │     │
+│  │  POST /api/avatar/generate          → Gemini avatar image        │     │
+│  │  POST /api/script/generate          → Gemini script via LangChain│     │
+│  │  POST /api/script/generate-video    → Veo 3.1 video per shot     │     │
+│  │  POST /api/video-maker/upload       → Save media to disk         │     │
+│  │  POST /api/video-maker/export       → ffmpeg clip assembly       │     │
+│  │  POST /api/pipeline/create          → Create job (TBD)           │     │
+│  │  GET  /api/pipeline/[id]            → Poll job status (TBD)      │     │
+│  │  GET  /api/storage/[id]/video       → Serve final video (TBD)    │     │
+│  │  GET  /api/storage/[id]/audio       → Serve audio file (TBD)     │     │
+│  │  GET  /api/storage/[id]/avatar      → Serve avatar image (TBD)   │     │
+│  └─────────────────────────────────────────────────────────────────┘     │
+│                                                                           │
+│  ┌─────────────────────────────────────────────────────────────────┐     │
+│  │                        Services Layer                            │     │
+│  │                                                                  │     │
+│  │  services/gemini-image.ts   → Avatar image via Gemini API        │     │
+│  │  services/gemini-script.ts  → Shot scripts via LangChain/Gemini  │     │
+│  │  services/gemini-video.ts   → Veo 3.1 video + reference images   │     │
+│  │  services/cartesia.ts       → Audio via Cartesia TTS             │     │
+│  │  services/skyreels.ts       → Talking-head video via Gradio      │     │
+│  │  services/voice-style.ts    → Voice style utilities              │     │
+│  └─────────────────────────────────────────────────────────────────┘     │
+│                                                                           │
+│  ┌─────────────────────────────────────────────────────────────────┐     │
+│  │                          lib Layer                               │     │
+│  │                                                                  │     │
+│  │  lib/redis.ts    → Upstash Redis singleton                       │     │
+│  │  lib/jobs.ts     → createJob / getJob / updateJob / getAvatar    │     │
+│  │  lib/types.ts    → Shared TypeScript interfaces                  │     │
+│  └─────────────────────────────────────────────────────────────────┘     │
+└──────────┬──────────────────────────────┬────────────────────────────────┘
+           │                              │
+┌──────────▼──────────┐      ┌────────────▼─────────────────────────────┐
+│   Upstash Redis      │      │          External AI APIs                 │
+│                      │      │                                           │
+│  job:{id}  → JSON    │      │  Google AI Studio  (Gemini image + text)  │
+│  avatar:{id} → b64   │      │  Google AI Studio  (Veo 3.1 video)        │
+│  syncso:{id} → jobId │      │  Cartesia          (TTS audio)            │
+└──────────────────────┘      │  Sync.so           (lip sync video)       │
+                              │  SkyReels / Gradio (talking head)         │
+┌─────────────────────┐       └───────────────────────────────────────────┘
+│  Local Filesystem    │
+│                      │
+│  ./storage/{job_id}/ │  ← pipeline job files (avatar.png, audio.wav, video.mp4)
+│  ./public/generated/ │  ← Veo generated shots (shot_1.mp4, shot_2.mp4 …)
+│  ./public/uploads/   │  ← Video Maker uploaded media
+└─────────────────────┘
 ```
 
 ---
@@ -201,55 +206,96 @@ ai-avatar-content/
 │
 ├── src/
 │   ├── app/
-│   │   ├── layout.tsx                        # Root layout
-│   │   ├── page.tsx                          # Home "/"
-│   │   ├── globals.css
+│   │   ├── layout.tsx                          # Root layout (sidebar + body)
+│   │   ├── page.tsx                            # Home "/" — redirects
+│   │   ├── globals.css                         # Tailwind v4 @import + @theme
 │   │   │
 │   │   ├── avatar/
 │   │   │   └── new/
-│   │   │       └── page.tsx                  # ✅ Avatar creation page (client)
+│   │   │       └── page.tsx                    # ✅ Avatar creation (client)
+│   │   │
+│   │   ├── script/
+│   │   │   ├── page.tsx                        # ✅ Shot editor + Veo generation (client)
+│   │   │   └── constants.ts                    # PODCAST_SHOTS defaults, character/set prompts
+│   │   │
+│   │   ├── video-maker/
+│   │   │   ├── page.tsx                        # ✅ NLE timeline editor (client)
+│   │   │   ├── store.tsx                       # Zustand-style React context store
+│   │   │   ├── types.ts                        # MediaItem, Clip, Track, Project types
+│   │   │   ├── mediaDb.ts                      # IndexedDB wrapper for media blobs
+│   │   │   ├── dragState.ts                    # Global drag state singleton
+│   │   │   └── _components/
+│   │   │       ├── ClipBlock.tsx               # Draggable clip on timeline
+│   │   │       ├── MediaPanel.tsx              # Left panel — imported media list
+│   │   │       ├── Preview.tsx                 # Centre — video preview player
+│   │   │       ├── ProjectsPanel.tsx           # Project switcher / management
+│   │   │       ├── Timeline.tsx                # Multi-track timeline
+│   │   │       └── TrackRow.tsx                # Single track row
 │   │   │
 │   │   ├── pipeline/
 │   │   │   └── [id]/
-│   │   │       └── page.tsx                  # 🔲 Pipeline status + video page
+│   │   │       └── page.tsx                    # 🔲 Pipeline status + video output
 │   │   │
 │   │   └── api/
 │   │       ├── avatar/
-│   │       │   └── generate/
-│   │       │       └── route.ts              # ✅ POST — Gemini avatar image
+│   │       │   └── generate/route.ts           # ✅ POST — Gemini avatar image
+│   │       ├── script/
+│   │       │   ├── generate/route.ts           # ✅ POST — Gemini script via LangChain
+│   │       │   └── generate-video/
+│   │       │       ├── text/route.ts           # ✅ POST — Veo text-only generation
+│   │       │       ├── image-direct/route.ts   # ✅ POST — Veo image-direct (Lite only)
+│   │       │       └── image-refs/route.ts     # ✅ POST — Veo reference images (Fast/Pro)
+│   │       ├── video-maker/
+│   │       │   ├── upload/route.ts             # ✅ POST — Save media to public/uploads
+│   │       │   └── export/route.ts             # ✅ POST — ffmpeg clip assembly
 │   │       ├── pipeline/
-│   │       │   ├── create/
-│   │       │   │   └── route.ts              # 🔲 POST — Start pipeline job
-│   │       │   └── [id]/
-│   │       │       └── route.ts              # 🔲 GET — Job status polling
-│   │       ├── storage/
-│   │       │   └── [id]/
-│   │       │       └── video/
-│   │       │           └── route.ts          # 🔲 GET — Serve video file
-│   │       └── webhooks/
-│   │           └── syncso/
-│   │               └── route.ts              # 🔲 POST — Sync.so callback
+│   │       │   ├── create/route.ts             # 🔲 POST — Start pipeline job
+│   │       │   └── [id]/route.ts               # 🔲 GET — Job status polling
+│   │       └── storage/
+│   │           └── [id]/
+│   │               ├── video/route.ts          # 🔲 GET — Serve final video
+│   │               ├── audio/route.ts          # 🔲 GET — Serve audio file
+│   │               └── avatar/route.ts         # 🔲 GET — Serve avatar image
+│   │
+│   ├── components/
+│   │   ├── AppSidebar.tsx                      # ✅ Global left nav (Avatar / Script / Video Maker)
+│   │   ├── ConfirmPopup.tsx                    # ✅ Reusable confirm/cancel modal
+│   │   ├── DeviceAwareUpload.tsx               # ✅ Native file picker + Image Library portal menu
+│   │   └── PromptEditor.tsx                    # ✅ Rich prompt editor with {variable} autocomplete
+│   │
+│   ├── hooks/
+│   │   └── useAudioProcessor.ts                # ✅ Tone.js pitch/formant voice processor hook
 │   │
 │   ├── lib/
-│   │   ├── types.ts                          # ✅ Shared TypeScript interfaces
-│   │   ├── redis.ts                          # ✅ Upstash Redis singleton
-│   │   └── jobs.ts                           # ✅ Job CRUD utilities
+│   │   ├── types.ts                            # ✅ Shared TypeScript interfaces (PipelineJob etc.)
+│   │   ├── redis.ts                            # ✅ Upstash Redis singleton
+│   │   └── jobs.ts                             # ✅ Job CRUD utilities
 │   │
 │   └── services/
-│       ├── gemini-image.ts                   # ✅ Avatar image generation
-│       ├── gemini-script.ts                  # 🔲 Script generation (LangChain)
-│       ├── cartesia.ts                       # 🔲 TTS audio generation
-│       └── syncso.ts                         # 🔲 Lip sync submission
+│       ├── gemini-image.ts                     # ✅ Avatar image via @google/generative-ai
+│       ├── gemini-script.ts                    # ✅ Shot scripts via LangChain + Gemini
+│       ├── gemini-video.ts                     # ✅ Veo 3.1 video via @google/genai
+│       ├── cartesia.ts                         # ✅ TTS audio (wired, not fully used)
+│       ├── skyreels.ts                         # ✅ Talking-head via SkyReels Gradio space
+│       └── voice-style.ts                      # ✅ Voice style mappings
 │
-├── storage/                                  # Local generated files (gitignored)
+├── public/
+│   ├── generated/                              # ✅ Veo-generated shot videos (shot_N.mp4)
+│   └── uploads/                               # ✅ Video Maker uploaded media
+│
+├── storage/                                    # Pipeline job files (gitignored)
 │   └── .gitkeep
 │
-├── .env                                      # Local env vars (gitignored)
-├── .env_example                              # Template with empty values
+├── .vscode/
+│   └── settings.json                           # css.lint.unknownAtRules: ignore (Tailwind v4)
+│
+├── .env                                        # Local env vars (gitignored)
+├── .env_example                                # Template
 ├── next.config.ts
 ├── tsconfig.json
 ├── package.json
-└── Architecture.md
+├── Architecture.md
+└── CHANGE-LOGS.md
 ```
 
 ### Path Alias
@@ -260,75 +306,99 @@ ai-avatar-content/
 
 ---
 
-## 5. Pipeline Flow
+## 5. Pages & Features
 
-The pipeline has two user-driven phases followed by an automated backend pipeline.
+### `/avatar/new` — Avatar Creation
 
-### Phase 1 — Avatar Creation (`/avatar/new`)
+- **Layout**: Two-column on desktop (form left, preview right `w-[400px]` sticky). Single-column on mobile.
+- **Flow**: User writes a face description → `POST /api/avatar/generate` → Gemini returns base64 image → displayed in right column with copy / download / regenerate buttons. Image opens in lightbox on click.
+- **Actions**: Regenerate, Download, Push to Library (copies to image library in Script page).
+- **API Key**: Gemini API key stored in `localStorage`, togglable visibility input.
+- **Auto-scroll**: On mobile, page scrolls to preview after generation completes.
 
-```
-User fills prompt
-      ↓
-POST /api/avatar/generate
-      ↓
-services/gemini-image.ts → Gemini API (gemini-3.1-flash-image-preview)
-      ↓
-Returns { image_base64, mime_type }
-      ↓
-Image displayed in browser — user regenerates until satisfied
-```
+### `/script` — Shot Editor & Veo Video Generation
 
-### Phase 2 — Pipeline Start (same page, Phase 2 UI)
+The primary production tool. Fully client-rendered, state persisted to `localStorage`.
 
-```
-User enters topic + clicks "Generate Video"
-      ↓
-POST /api/pipeline/create  { topic, avatar_prompt, image_base64 }
-      ↓
-lib/jobs.ts createJob()
-  → Writes job:{id} to Redis (status: pending)
-  → Writes avatar:{id} to Redis with 1hr TTL
-      ↓
-Pipeline orchestration kicks off (async):
-  1. script_generating  → gemini-script.ts   → LangChain + Gemini
-  2. script_complete
-  3. tts_processing     → cartesia.ts        → Cartesia TTS → audio file saved
-  4. tts_complete
-  5. lipsync_processing → syncso.ts          → Sync.so job submitted
-  → Returns { job_id }
-      ↓
-Browser navigates to /pipeline/{job_id}
+#### Layout
+
+Two-panel on desktop (`lg:`), stacked on mobile:
+
+- **Left panel** — Globals accordion + Shots accordion
+- **Right panel** — Settings, Image Library, Generated Media
+
+#### Shot Data Model
+
+```typescript
+type Shot = {
+  shot_number: number;
+  duration: number | string;
+  resolution: string;
+  imageRefs: string[]; // IDs of ImageItems attached to this shot
+  prompt: string;
+  selected?: boolean;
+  status?: 'idle' | 'generating' | 'completed' | 'error';
+  generatedVideoUrl?: string;
+  generatedVideoUrls?: string[];
+};
 ```
 
-### Phase 3 — Pipeline Monitoring (`/pipeline/[id]`)
+#### Globals
 
-```
-Browser polls GET /api/pipeline/[id] every ~3s
-      ↓
-lib/jobs.ts getJob() → Redis read
-      ↓
-Returns { job, video_url }
-      ↓
-UI shows current stage_message + progress
-      ↓
-Sync.so fires POST /api/webhooks/syncso when video complete
-  → Redis lookup: syncso:{syncso_id} → job_id
-  → lib/jobs.ts updateJob() → status: complete, final_video_path set
-      ↓
-Next poll detects status: complete
-  → Video player rendered with video_url
-```
+- Key=value pairs with multi-line value support (`"""..."""` syntax)
+- Used in shot prompts via `{variableName}` syntax — substituted before API call
+- Bulk Edit mode: edit all as `KEY=value` text block
+- Persistent in `localStorage`
 
-### Job Status State Machine
+#### Shots
 
-```
-pending
-  → script_generating → script_complete
-  → tts_processing    → tts_complete
-  → lipsync_processing
-  → complete
-  → failed  (from any stage)
-```
+- Accordion list; one expanded at a time
+- Per-shot: prompt (via `PromptEditor`), duration, resolution, attached images (max 3), generated videos
+- Select All / individual checkbox for batch generation
+- **Bulk Edit**: Edit all shots as raw JSON array in a textarea; validates keys on save, warns on unknown keys
+- Shot status badges: idle / generating / completed / error
+
+#### Image Library (right panel)
+
+- Upload via `DeviceAwareUpload` (native OS picker + Image Library portal menu)
+- Images stored as `File` objects in React state + `previewUrl` blob URLs
+- `hasLibraryImages` prop hides Image Library option when empty
+- Per-shot: attach up to 3 images from library; multi-select modal for bulk attach
+- Image deletion removes from library and all shot refs
+- `imageRefs` legacy string constants (`'1'`, `'2'`) stripped on `localStorage` load
+
+#### Veo Video Generation
+
+Client automatically routes each shot to the correct API endpoint based on model and image count:
+
+| Model                                  | Images | Route           | Veo API shape                          |
+| -------------------------------------- | ------ | --------------- | -------------------------------------- |
+| Any                                    | 0      | `/text`         | `{ prompt }`                           |
+| Lite (`veo-3.1-lite-generate-preview`) | 1–3    | `/image-direct` | `{ prompt, image }` — first image only |
+| Fast / Pro                             | 1–3    | `/image-refs`   | `{ prompt, referenceImages[] }`        |
+
+- `imageRefs` IDs resolved client-side → `File` → base64 before fetch
+- Models: `veo-3.1-fast-generate-preview` (default), `veo-3.1-generate-preview`, `veo-3.1-lite-generate-preview`
+- Selecting Lite shows a persistent blue info banner above the model dropdown
+- Generated videos saved to `public/generated/shot_N.mp4`; duplicates get `(1)`, `(2)` suffix
+- Abort all button cancels in-flight requests via `AbortController`
+- Error toast (bottom-centre, 7s auto-dismiss) for quota / RAI / API errors
+
+#### Error Handling
+
+- **429 / RESOURCE_EXHAUSTED** → "Quota exceeded — check your Google AI plan"
+- **RAI filtered** → "Video was blocked by safety filters — `<reason>`"
+- **No video returned** → "Generation may have been filtered or failed silently"
+- **Other API errors** → API message passed through directly
+
+### `/video-maker` — NLE Timeline Editor
+
+- Browser-based non-linear editor
+- **Panels**: Projects (left), Media Library (left), Preview (centre), Timeline (bottom)
+- **State**: React context store (`store.tsx`); media blobs persisted in IndexedDB (`mediaDb.ts`)
+- **Media**: Upload video/audio → stored as blob URLs + metadata; waveform analysis for audio tracks
+- **Timeline**: Multi-track; clips draggable, trimable; playhead scrubbing
+- **Export**: `POST /api/video-maker/export` — sends clip list + trim points → server spawns `ffmpeg` → returns assembled video
 
 ---
 
@@ -336,34 +406,45 @@ pending
 
 ### Route Map
 
-| Path                          | Type             | Status    | Purpose                          |
-| ----------------------------- | ---------------- | --------- | -------------------------------- |
-| `/`                           | RSC page         | ✅ exists | Home                             |
-| `/avatar/new`                 | Client Component | ✅ done   | Avatar creation + pipeline start |
-| `/pipeline/[id]`              | Client Component | 🔲 TBD    | Status polling + video output    |
-| `POST /api/avatar/generate`   | API Route        | ✅ done   | Gemini avatar image              |
-| `POST /api/pipeline/create`   | API Route        | 🔲 TBD    | Create + start pipeline          |
-| `GET /api/pipeline/[id]`      | API Route        | 🔲 TBD    | Job status                       |
-| `GET /api/storage/[id]/video` | API Route        | 🔲 TBD    | Serve video file                 |
-| `POST /api/webhooks/syncso`   | API Route        | 🔲 TBD    | Sync.so callback                 |
+| Path                                           | Type             | Status    | Purpose                         |
+| ---------------------------------------------- | ---------------- | --------- | ------------------------------- |
+| `/`                                            | RSC page         | ✅ exists | Home                            |
+| `/avatar/new`                                  | Client Component | ✅ done   | Avatar creation                 |
+| `/script`                                      | Client Component | ✅ done   | Shot editor + Veo generation    |
+| `/video-maker`                                 | Client Component | ✅ done   | NLE timeline editor             |
+| `/pipeline/[id]`                               | Client Component | 🔲 TBD    | Status polling + video output   |
+| `POST /api/avatar/generate`                    | API Route        | ✅ done   | Gemini avatar image             |
+| `POST /api/script/generate`                    | API Route        | ✅ done   | Gemini script via LangChain     |
+| `POST /api/script/generate-video/text`         | API Route        | ✅ done   | Veo text-only generation        |
+| `POST /api/script/generate-video/image-direct` | API Route        | ✅ done   | Veo image-direct (Lite)         |
+| `POST /api/script/generate-video/image-refs`   | API Route        | ✅ done   | Veo reference images (Fast/Pro) |
+| `POST /api/video-maker/upload`                 | API Route        | ✅ done   | Save media to public/uploads    |
+| `POST /api/video-maker/export`                 | API Route        | ✅ done   | ffmpeg clip assembly            |
+| `POST /api/pipeline/create`                    | API Route        | 🔲 TBD    | Create + start pipeline         |
+| `GET /api/pipeline/[id]`                       | API Route        | 🔲 TBD    | Job status                      |
+| `GET /api/storage/[id]/video`                  | API Route        | 🔲 TBD    | Serve video file                |
+| `GET /api/storage/[id]/audio`                  | API Route        | 🔲 TBD    | Serve audio file                |
+| `GET /api/storage/[id]/avatar`                 | API Route        | 🔲 TBD    | Serve avatar image              |
 
 ### Server vs Client Components
 
-| Component                    | Type   | Reason                         |
-| ---------------------------- | ------ | ------------------------------ |
-| `app/layout.tsx`             | RSC    | Static shell, no interactivity |
-| `app/page.tsx`               | RSC    | Static home page               |
-| `app/avatar/new/page.tsx`    | Client | State, fetch, user interaction |
-| `app/pipeline/[id]/page.tsx` | Client | Polling, state, video playback |
-| All `route.ts` files         | Server | API handlers, never rendered   |
+| Component                    | Type   | Reason                          |
+| ---------------------------- | ------ | ------------------------------- |
+| `app/layout.tsx`             | RSC    | Static shell                    |
+| `app/page.tsx`               | RSC    | Static home                     |
+| `app/avatar/new/page.tsx`    | Client | State, fetch, user interaction  |
+| `app/script/page.tsx`        | Client | Heavy state, localStorage, APIs |
+| `app/video-maker/page.tsx`   | Client | IndexedDB, drag, media, ffmpeg  |
+| `app/pipeline/[id]/page.tsx` | Client | Polling, video playback         |
+| All `route.ts` files         | Server | API handlers, never rendered    |
 
 ---
 
-## 7. Data Layer — Upstash Redis
+## 7. Data Layer
 
-Upstash Redis is used exclusively for job state. It communicates over HTTP (REST), making it safe to use in Next.js serverless API routes without connection-pooling concerns.
+### Upstash Redis (Pipeline Jobs)
 
-### Key Patterns
+Used exclusively for async pipeline job state. Communicates over HTTP (REST) — safe in serverless routes.
 
 | Key                      | Value                        | TTL   | Purpose                    |
 | ------------------------ | ---------------------------- | ----- | -------------------------- |
@@ -371,41 +452,75 @@ Upstash Redis is used exclusively for job state. It communicates over HTTP (REST
 | `avatar:{job_id}`        | base64 image string          | 3600s | Temporary avatar storage   |
 | `syncso:{syncso_job_id}` | `job_id` string              | None  | Reverse lookup for webhook |
 
-### Access Pattern
+All Redis access goes through `src/lib/jobs.ts`. No route imports `redis` directly.
 
-**All Redis access goes through `src/lib/jobs.ts`.** No API route or service imports `redis` directly.
+### LocalStorage (Script Page)
 
-```
-API Route / Service
-      ↓
-lib/jobs.ts  (createJob / getJob / updateJob / getAvatarBase64)
-      ↓
-lib/redis.ts  (singleton)
-      ↓
-Upstash REST API  →  Redis
-```
+The script page persists its full state to `localStorage` on every state change:
 
-### Job Update Pattern
+| Key              | Shape                  | Notes                                       |
+| ---------------- | ---------------------- | ------------------------------------------- |
+| `script_shots`   | `Shot[]` JSON          | Legacy `imageRefs` strings stripped on load |
+| `script_globals` | `{name, value}[]` JSON | Global variable definitions                 |
+| `script_apiKey`  | string                 | Veo API key                                 |
+| `script_model`   | string                 | Selected Veo model name                     |
 
-Updates use read-then-write (single job = single JSON value):
+### IndexedDB (Video Maker)
 
-```typescript
-const existing = await getJob(job_id); // 1 Redis GET
-const updated = { ...existing, ...updates, updated_at: Date.now() };
-await redis.set(`job:${job_id}`, JSON.stringify(updated)); // 1 Redis SET
-```
-
-`updated_at` is always overwritten unconditionally on every update.
+Media blobs (video/audio files) too large for localStorage are persisted in IndexedDB via `mediaDb.ts`.
 
 ---
 
 ## 8. TypeScript Types
 
-All shared interfaces live in `src/lib/types.ts`. No other file redefines these shapes.
+### Script Page Types (local to `script/page.tsx`)
 
-### `PipelineJob`
+```typescript
+type Shot = {
+  shot_number: number;
+  duration: number | string;
+  resolution: string;
+  imageRefs: string[]; // IDs referencing ImageItem.id
+  prompt: string;
+  selected?: boolean;
+  status?: 'idle' | 'generating' | 'completed' | 'error';
+  generatedVideoUrl?: string;
+  generatedVideoUrls?: string[];
+};
 
-The central data model for a pipeline run.
+type ImageItem = {
+  id: string;
+  file: File;
+  previewUrl: string; // blob URL from URL.createObjectURL
+};
+```
+
+### Video Maker Types (`video-maker/types.ts`)
+
+```typescript
+interface MediaItem {
+  id: string;
+  name: string;
+  type: 'video' | 'audio';
+  localUrl: string;
+  serverPath: string | null;
+  duration: number;
+  thumbnail: string | null;
+  waveform: number[] | null;
+  size: number;
+}
+
+interface Clip {
+  id: string;
+  mediaItemId: string;
+  trackId: string;
+  timelineStart: number;
+  trimStart: number;
+  trimEnd: number;
+}
+```
+
+### Pipeline Types (`lib/types.ts`)
 
 ```typescript
 interface PipelineJob {
@@ -428,19 +543,10 @@ interface PipelineJob {
   syncso_job_id: string | null;
   final_video_path: string | null;
   error: string | null;
-  created_at: number; // unix ms
-  updated_at: number; // unix ms
+  created_at: number;
+  updated_at: number;
 }
 ```
-
-### Other Interfaces
-
-| Interface                | Used By                              | Shape                                             |
-| ------------------------ | ------------------------------------ | ------------------------------------------------- |
-| `AvatarGenerateRequest`  | `POST /api/avatar/generate` body     | `{ avatar_prompt: string }`                       |
-| `AvatarGenerateResponse` | `POST /api/avatar/generate` response | `{ image_base64: string; mime_type: string }`     |
-| `PipelineCreateRequest`  | `POST /api/pipeline/create` body     | `{ topic; avatar_prompt; image_base64 }`          |
-| `PipelineStatusResponse` | `GET /api/pipeline/[id]` response    | `{ job: PipelineJob; video_url: string \| null }` |
 
 ---
 
@@ -448,13 +554,13 @@ interface PipelineJob {
 
 ### Error Response Format
 
-All API routes return errors in a consistent shape:
+All API routes return errors as:
 
 ```json
 { "error": "<human-readable message>" }
 ```
 
-HTTP status codes: `400` for bad input, `500` for unexpected errors, `404` for missing resources.
+HTTP status codes: `400` bad input, `500` server error, `404` not found.
 
 ### Route Details
 
@@ -462,51 +568,114 @@ HTTP status codes: `400` for bad input, `500` for unexpected errors, `404` for m
 
 - **Input**: `{ avatar_prompt: string }`
 - **Output**: `{ image_base64: string; mime_type: string }`
-- **Errors**: 400 if prompt missing/empty; 500 on Gemini failure
-- **Notes**: Prompt is augmented server-side with lipsync-optimisation instructions before sending to Gemini. The augmentation is never exposed to the user.
+- Prompt augmented server-side with lipsync-safety instructions before Gemini call.
 
-#### `POST /api/pipeline/create` _(TBD)_
+#### `POST /api/script/generate`
 
-- **Input**: `{ topic, avatar_prompt, image_base64 }`
-- **Output**: `{ job_id: string }`
+- **Input**: `{ topic, duration, style?, … }`
+- **Output**: Shot list JSON
+- Uses `gemini-script.ts` via LangChain.
 
-#### `GET /api/pipeline/[id]` _(TBD)_
+#### `POST /api/script/generate-video/text`
 
-- **Output**: `{ job: PipelineJob; video_url: string | null }`
+- **Input**: `{ prompt, modelName, duration, resolution, shotNumber, apiKey }`
+- **Output**: `{ videoUrl: string }` — used when shot has no images.
 
-#### `GET /api/storage/[id]/video` _(TBD)_
+#### `POST /api/script/generate-video/image-direct`
 
-- Streams the final video file from `./storage/{id}/`
+- **Input**: `{ prompt, modelName, duration, resolution, shotNumber, apiKey, image: { base64, mimeType } }`
+- **Output**: `{ videoUrl: string }` — Lite only. Passes image as Veo `image:` param, animates it directly.
 
-#### `POST /api/webhooks/syncso` _(TBD)_
+#### `POST /api/script/generate-video/image-refs`
 
-- Receives Sync.so completion payload
-- Looks up pipeline `job_id` via `syncso:{syncso_job_id}` key
-- Updates job to `complete` and sets `final_video_path`
+- **Input**: `{ prompt, modelName, duration, resolution, shotNumber, apiKey, referenceImages: { base64, mimeType }[] }`
+- **Output**: `{ videoUrl: string }` — Fast/Pro with 1–3 images. Images guide style/content, prompt drives the scene.
+
+All three routes: output saved to `public/generated/shot_{N}.mp4`; appends `(1)`, `(2)` suffix if file exists. Errors parsed to user-friendly messages (quota, RAI, permission, invalid arg).
+
+#### `POST /api/video-maker/upload`
+
+- Accepts `multipart/form-data` with a `file` field.
+- Saves to `public/uploads/` and returns `{ path }`.
+
+#### `POST /api/video-maker/export`
+
+- Receives clip assembly spec (clips, tracks, trim points).
+- Spawns `ffmpeg` subprocess to concatenate/trim clips.
+- Returns exported video path.
 
 ---
 
 ## 10. Services Layer
 
-Each external API integration lives in its own file under `src/services/`. Services are pure functions — they receive inputs, call an API, and return data. They never read from Redis or touch the filesystem directly.
+Each integration is a pure function — receives inputs, calls API, returns data. No Redis or filesystem access except `gemini-video.ts` (saves output file).
 
-| File               | Status  | SDK Used                         | Purpose                    |
-| ------------------ | ------- | -------------------------------- | -------------------------- |
-| `gemini-image.ts`  | ✅ Done | `@google/generative-ai` (direct) | Generate avatar face image |
-| `gemini-script.ts` | 🔲 TBD  | `@langchain/google-genai`        | Generate video script      |
-| `cartesia.ts`      | 🔲 TBD  | `@cartesia/cartesia-js`          | Text-to-speech audio       |
-| `syncso.ts`        | 🔲 TBD  | `axios` + `form-data`            | Submit lip sync job        |
+| File               | Status   | SDK Used                  | Purpose                              |
+| ------------------ | -------- | ------------------------- | ------------------------------------ |
+| `gemini-image.ts`  | ✅ Done  | `@google/generative-ai`   | Generate avatar face image           |
+| `gemini-script.ts` | ✅ Done  | `@langchain/google-genai` | Generate video shot scripts          |
+| `gemini-video.ts`  | ✅ Done  | `@google/genai`           | Veo 3.1 — text / image-direct / refs |
+| `cartesia.ts`      | ✅ Wired | `@cartesia/cartesia-js`   | Text-to-speech audio                 |
+| `skyreels.ts`      | ✅ Wired | `@gradio/client`          | Talking-head video (SkyReels Gradio) |
+| `voice-style.ts`   | ✅ Done  | —                         | Voice style mappings/utilities       |
 
-### `gemini-image.ts`
+### `gemini-video.ts` — Key Details
 
-- Model: `gemini-3.1-flash-image-preview`
-- Prompt augmentation: appends lipsync-safety instructions to every user prompt
-- Returns: `{ image_base64: string; mime_type: string }`
-- Throws: `"Gemini returned no image in response"` if no image part in response
+Three exported functions sharing a `saveVideo` polling/save helper and `logConfig` logger:
+
+| Export                    | Veo API param                                 | Used by               |
+| ------------------------- | --------------------------------------------- | --------------------- |
+| `generateReelText`        | `{ prompt }`                                  | `/text` route         |
+| `generateReelImageDirect` | `{ prompt, image: { imageBytes, mimeType } }` | `/image-direct` route |
+| `generateReelImageRefs`   | `{ prompt, config: { referenceImages[] } }`   | `/image-refs` route   |
+
+- Default model: `veo-3.1-fast-generate-preview`; also supports `veo-3.1-generate-preview` and `veo-3.1-lite-generate-preview`
+- `referenceImages` use `VideoGenerationReferenceType.ASSET`
+- Polls every 10s until `operation.done`
+- RAI check: throws if `raiMediaFilteredCount > 0` with reasons from `raiMediaFilteredReasons`
+- `parseApiError` converts SDK JSON errors into user-friendly strings (quota 429, permission denied, invalid arg)
+- Console prints mode, model, duration, resolution, and image count per generation
 
 ---
 
-## 11. Styling System
+## 11. Components
+
+### `AppSidebar.tsx`
+
+Global left navigation rendered in `layout.tsx`. Links: Avatar (`/avatar/new`), Script (`/script`), Video Maker (`/video-maker`). Active state via `usePathname`.
+
+### `DeviceAwareUpload.tsx`
+
+Smart upload button that adapts to context:
+
+- When `hasLibraryImages = false`: clicking directly opens the OS native file picker (`<input type="file" accept="image/*" multiple>`).
+- When `hasLibraryImages = true`: clicking opens a portal menu with two options — **Image Library** and **Upload Images**.
+- Portal menu uses `createPortal` into `document.body` + `getBoundingClientRect` positioning to avoid `overflow: hidden` clipping.
+- Outside-click uses `click` event (not `mousedown`) to avoid unmounting portal before button handlers fire.
+
+**Props**: `onUpload(files)`, `onOpenLibrary?()`, `hasLibraryImages?`, `children?`, `className?`
+
+### `PromptEditor.tsx`
+
+Rich text editor for shot prompts with global variable support:
+
+- Renders `{variableName}` tokens as visually highlighted spans (violet halo).
+- Typing `{` triggers an autocomplete dropdown of available globals with keyboard navigation.
+- Auto-inserts trailing space after selecting a variable.
+- Detected variables displayed below as hoverable pill tags showing value preview.
+- Uses a transparent textarea overlay over a styled div for cursor accuracy.
+
+**Props**: `value`, `onChange(val)`, `globals: { name, value }[]`, `placeholder?`
+
+### `ConfirmPopup.tsx`
+
+Reusable modal for destructive action confirmation. Used for: delete shot, delete image, delete video, delete all vars.
+
+**Props**: `isOpen`, `title?`, `message`, `onConfirm()`, `onCancel()`
+
+---
+
+## 12. Styling System
 
 ### Tailwind CSS v4
 
@@ -517,20 +686,30 @@ Each external API integration lives in its own file under `src/services/`. Servi
 | Import          | `@import 'tailwindcss'` in globals.css |
 | Theme extension | `@theme` CSS block                     |
 
-### Design Conventions (Avatar Page)
+VS Code suppresses the `@theme` unknown-at-rule warning via `.vscode/settings.json`:
 
-- Background: `bg-gray-950` (near-black)
-- Primary action: `bg-indigo-600` → hover `bg-indigo-500`
-- Final CTA: `bg-emerald-600` (visually distinct — pipeline commit)
-- Errors: `bg-red-900/30` border `border-red-700`
-- Success badge: `bg-emerald-900/60` border `border-emerald-700`
-- Transitions: opacity fade-in on image arrival; `fadeSlideIn` keyframe for Phase 2
+```json
+{ "css.lint.unknownAtRules": "ignore" }
+```
+
+### Design Conventions
+
+| Token         | Usage                                                      |
+| ------------- | ---------------------------------------------------------- |
+| `bg-slate-50` | Page backgrounds                                           |
+| `slate-900`   | Primary text                                               |
+| `violet-600`  | Primary action buttons, focus rings, active borders        |
+| `violet-50`   | Subtle selected/active backgrounds                         |
+| `amber-50`    | Warning banners (e.g., bulk edit unknown key warnings)     |
+| `red-600`     | Error toast, delete actions                                |
+| `slate-200`   | Default borders and dividers                               |
+| Rounded       | `rounded-xl` (cards/modals), `rounded-lg` (buttons/inputs) |
 
 ---
 
-## 12. TypeScript Configuration
+## 13. TypeScript Configuration
 
-[tsconfig.json](tsconfig.json) key settings:
+Key settings in `tsconfig.json`:
 
 | Setting            | Value     | Why                                   |
 | ------------------ | --------- | ------------------------------------- |
@@ -543,7 +722,7 @@ Each external API integration lives in its own file under `src/services/`. Servi
 
 ---
 
-## 13. Testing Architecture
+## 14. Testing Architecture
 
 ```
 Jest 30
@@ -560,7 +739,7 @@ yarn test --watch   # Watch mode
 
 ---
 
-## 14. Code Quality & Pre-commit Pipeline
+## 15. Code Quality & Pre-commit Pipeline
 
 ```
 git commit
@@ -578,7 +757,7 @@ Commit created (or aborted)
 
 ---
 
-## 15. Build & Toolchain
+## 16. Build & Toolchain
 
 ```bash
 yarn dev       # Dev server with fast refresh
@@ -602,7 +781,7 @@ make frontend-build    # yarn build
 
 ---
 
-## 16. Environment Configuration
+## 17. Environment Configuration
 
 All credentials are stored in `.env` (gitignored). `.env_example` is the committed template.
 
@@ -610,22 +789,27 @@ All credentials are stored in `.env` (gitignored). `.env_example` is the committ
 
 ```bash
 # Upstash Redis
-UPSTASH_REDIS_REST_URL=        # REST URL from Upstash console
-UPSTASH_REDIS_REST_TOKEN=      # REST token from Upstash console
+UPSTASH_REDIS_REST_URL=
+UPSTASH_REDIS_REST_TOKEN=
 
-# Google AI Studio
-GEMINI_API_KEY=  # API key for Gemini image + text
+# Google AI Studio — Gemini image + script generation
+GEMINI_API_KEY=
+
+# Google AI Studio — Veo video generation (also accepted as user input in UI)
+GOOGLE_API_KEY=
 
 # Cartesia
-CARTESIA_API_KEY=              # API key from Cartesia dashboard
+CARTESIA_API_KEY=
 
 # Sync.so
-SYNCSO_API_KEY=                # API key from Sync.so dashboard
+SYNCSO_API_KEY=
 
 # App
-NEXT_PUBLIC_APP_URL=http://localhost:3000   # Used by webhook URL construction
-STORAGE_PATH=./storage                      # Root path for generated files
+NEXT_PUBLIC_APP_URL=http://localhost:3000
+STORAGE_PATH=./storage
 ```
+
+> **Note**: The Veo API key (`GOOGLE_API_KEY` / `GEMINI_API_KEY`) can also be entered directly in the Script page UI and is stored in `localStorage`. The UI key takes precedence over the env var.
 
 ### Conventions
 
@@ -634,29 +818,35 @@ STORAGE_PATH=./storage                      # Root path for generated files
 | `NEXT_PUBLIC_` | Browser + Server | Non-sensitive config (app URL) |
 | _(no prefix)_  | Server only      | API keys, secrets              |
 
-**Never prefix secrets with `NEXT_PUBLIC_`** — they will be bundled into client JS.
+---
 
-### Validation
+## 18. Local Storage & Generated Files
 
-`lib/redis.ts` throws a descriptive error at startup if either Redis variable is missing. Service files check their respective keys before making API calls.
+### Pipeline Jobs
+
+Generated files for async pipeline jobs are saved to `./storage/{job_id}/` (gitignored).
+
+| File         | Written By           | Purpose                  |
+| ------------ | -------------------- | ------------------------ |
+| `avatar.png` | Pipeline TTS stage   | Avatar image for Sync.so |
+| `audio.wav`  | Cartesia service     | TTS output               |
+| `video.mp4`  | Post-webhook handler | Downloaded from Sync.so  |
+
+### Veo Generated Videos
+
+`public/generated/` — served statically by Next.js.
+
+| File         | Written By        | Notes                                      |
+| ------------ | ----------------- | ------------------------------------------ |
+| `shot_N.mp4` | `gemini-video.ts` | If file exists, appends `(1)`, `(2)`, etc. |
+
+### Video Maker Uploads
+
+`public/uploads/` — served statically. Written by `POST /api/video-maker/upload`.
 
 ---
 
-## 17. Local Storage
-
-Generated files are saved to `./storage/{job_id}/` on the server filesystem.
-
-| File                      | Written By                                  | Purpose                  |
-| ------------------------- | ------------------------------------------- | ------------------------ |
-| `avatar.png` (or similar) | TTS stage (reads from Redis, saves to disk) | Avatar image for Sync.so |
-| `audio.wav`               | Cartesia service                            | TTS output               |
-| `video.mp4`               | Post-webhook handler                        | Downloaded from Sync.so  |
-
-The `storage/` folder is gitignored. Only `storage/.gitkeep` is committed so the folder is tracked by git but its contents are never committed.
-
----
-
-## 18. CI/CD
+## 19. CI/CD
 
 > **TBD** — No CI/CD pipeline is configured.
 >
@@ -669,7 +859,7 @@ The `storage/` folder is gitignored. Only `storage/.gitkeep` is committed so the
 
 ---
 
-## 19. Developer Workflow
+## 20. Developer Workflow
 
 ### First-time Setup
 

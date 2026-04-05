@@ -54,12 +54,15 @@ Guidelines:
   ['human', '{topic}'],
 ]);
 
-export async function extractVoiceStyle(topic: string): Promise<VoiceStyle> {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) throw new Error('Missing environment variable: GEMINI_API_KEY');
+export async function extractVoiceStyle(
+  topic: string,
+  apiKey?: string
+): Promise<VoiceStyle> {
+  const resolvedKey = apiKey || process.env.GEMINI_API_KEY;
+  if (!resolvedKey) throw new Error('Missing GEMINI_API_KEY');
 
   const model = new ChatGoogleGenerativeAI({
-    apiKey,
+    apiKey: resolvedKey,
     model: 'gemini-2.0-flash',
     temperature: 0,
   });

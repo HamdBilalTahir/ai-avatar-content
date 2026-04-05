@@ -2,6 +2,26 @@
 
 ---
 
+### ✨ Features
+
+---
+
+> ### UI-Provided Gemini & Veo API Keys Exclusively Used
+>
+> - **What changed:** Detached the Gemini API key from being exclusively loaded via the `.env` file on the New Avatar page, and the Veo API key on the Script Video Generation page. The API keys are now consumed strictly from the UI prompts on the frontend and explicitly passed to the backend for Avatar generation, Script generation, Pipeline creation (including voice style extraction), and Video Generation. The `gemini-video` service specifically removes its `.env` fallback to strictly enforce the user-entered Veo API key.
+> - **Why:** Gives the user direct control over their Gemini and Veo API usage quotas per session by utilizing their own UI-provided API keys at all times, making the deployment more tenant-friendly.
+> - **Files:**
+>   - `src/app/avatar/new/page.tsx`
+>   - `src/app/api/avatar/generate/route.ts`
+>   - `src/services/gemini-image.ts`
+>   - `src/app/api/script/generate/route.ts`
+>   - `src/services/gemini-script.ts`
+>   - `src/app/api/pipeline/create/route.ts`
+>   - `src/services/voice-style.ts`
+>   - `src/services/gemini-video.ts`
+
+---
+
 ### 🐛 Fixes
 
 ---
@@ -198,7 +218,99 @@
 
 ---
 
+### ✨ Features
+
+---
+
+> ### Veo 3.1 Lite — Inline Image Limitation Notice & Correct Model ID
+>
+> - **What changed:** When Veo 3.1 Lite (`veo-3.1-lite-generate-preview`) is selected in the Settings panel, a persistent blue info banner appears directly above the Model dropdown explaining that Lite supports a maximum of 1 image per shot and that extra images will be ignored. The banner disappears instantly when switching to a different model. Model ID corrected from `veo-3.1-lite-preview` to `veo-3.1-lite-generate-preview`.
+> - **Why:** Lite does not support the `referenceImages` API — silently dropping images 2 and 3 without any notice would be confusing to users who have multiple images attached to their shots.
+> - **Files:**
+>   - `src/app/script/page.tsx`
+
+---
+
+> ### Fast/Pro Models Always Use Reference Images API
+>
+> - **What changed:** For Veo 3.1 Fast and Pro, any shot with 1–3 images now always uses the `/image-refs` route (`referenceImages:` API) regardless of image count. Previously, 1 image routed to `/image-direct`. The `/image-refs` route validation was also relaxed to accept a minimum of 1 image (previously 2).
+> - **Why:** The image-direct API animates the image as a literal first frame — the prompt has little control over the scene. The reference images API uses images as style/content guidance while the prompt fully drives the scene composition, making it far more useful for creative video generation.
+> - **Files:**
+>   - `src/app/script/page.tsx`
+>   - `src/app/api/script/generate-video/image-refs/route.ts`
+
+---
+
+> ### Three-Route Video Generation Architecture
+>
+> - **What changed:** The single hybrid `/api/script/generate-video` route was replaced with three purpose-built routes, each with a clean input contract matching a distinct Veo API call shape:
+>   - `POST /api/script/generate-video/text` — prompt only, no images
+>   - `POST /api/script/generate-video/image-direct` — prompt + single image animated directly via Veo's `image:` param (Lite only)
+>   - `POST /api/script/generate-video/image-refs` — prompt + 1–3 style/content reference images via `referenceImages:` param (Fast/Pro)
+>
+>   The client (`script/page.tsx`) automatically selects the correct route based on model + image count:
+>   - 0 images → `/text`
+>   - Lite + any images → `/image-direct` (first image only; Lite doesn't support `referenceImages`)
+>   - Fast/Pro + 1 image → `/image-direct`
+>   - Fast/Pro + 2–3 images → `/image-refs`
+>
+>   `gemini-video.ts` was refactored into three exported functions (`generateReelText`, `generateReelImageDirect`, `generateReelImageRefs`) sharing a common `saveVideo` polling/save helper and `logConfig` logger. The old `generateReel` export was removed.
+>
+> - **Why:** The old hybrid route conflated three fundamentally different Veo API shapes into one function with conditionals, making it hard to reason about, test, or extend. Separating them gives each route a single responsibility and a clear, validated input contract.
+> - **Files:**
+>   - `src/app/api/script/generate-video/text/route.ts` _(new)_
+>   - `src/app/api/script/generate-video/image-direct/route.ts` _(new)_
+>   - `src/app/api/script/generate-video/image-refs/route.ts` _(new)_
+>   - `src/app/api/script/generate-video/route.ts` _(deleted)_
+>   - `src/services/gemini-video.ts`
+>   - `src/app/script/page.tsx`
+
+---
+
+> ### Veo 3.1 Lite Model Added
+>
+> - **What changed:** Added `veo-3.1-lite-generate-preview` as a selectable model in the Script page Settings panel. Lite does not support the `referenceImages` API — if a Lite shot has images attached, only the first is used via the `image-direct` route.
+> - **Why:** Lite is faster and cheaper for simple generations that don't need multi-image reference guidance.
+> - **Files:**
+>   - `src/app/script/page.tsx`
+
+---
+
+> ### Architecture Document — Updated for Three-Route Video Generation
+>
+> - **What changed:** `Architecture.md` updated to reflect the three-route video generation split: project structure now shows `generate-video/text/`, `generate-video/image-direct/`, and `generate-video/image-refs/` sub-routes; the script page Veo section has a routing decision table (model × image count); route map and API layer details updated for all three routes; `gemini-video.ts` services section rewritten to document the three exported functions and shared helpers.
+> - **Files:**
+>   - `Architecture.md`
+
+---
+
+> ### Architecture Document — Full Rewrite
+>
+> - **What changed:** `Architecture.md` was fully rewritten to reflect the current state of the codebase. Added: Script page (shot editor, global vars, bulk edit, image refs, Veo generation, localStorage persistence), Video Maker (browser NLE, IndexedDB, ffmpeg export), all new API routes (`/api/script/generate`, `/api/script/generate-video`, `/api/video-maker/upload`, `/api/video-maker/export`), new services (`gemini-video.ts`, `skyreels.ts`, `voice-style.ts`), new components (`AppSidebar`, `DeviceAwareUpload`, `PromptEditor`, `ConfirmPopup`), `@google/genai` SDK, `@gradio/client`, `tone.js`, `.vscode/settings.json`, `public/generated/` and `public/uploads/` output directories, design token conventions, and updated route/status tables.
+> - **Why:** The previous document described only the avatar + pipeline flow and was missing all work done since initial setup.
+> - **Files:**
+>   - `Architecture.md`
+
+---
+
 ### 🐛 Fixes
+
+---
+
+> ### Graceful Error Handling for Video Generation Failures
+>
+> - **What changed:** Generation errors (quota exceeded, RAI content filter, permission denied, invalid arguments, no output returned) are now caught and converted into user-friendly messages displayed in a red toast notification at the bottom of the screen. The toast auto-dismisses after 7 seconds and has a manual ✕ close button. `console.error` calls in the generation path were changed to `console.warn` to prevent the Next.js dev overlay from hijacking the screen.
+> - **Why:** Previously, any API error caused a raw error object to be logged, triggered the Next.js error overlay in dev, and gave the user no visible feedback other than a red badge on the shot card. Quota (429) and RAI filter rejections are expected occurrences that should be communicated clearly without crashing the UI.
+> - **Error cases handled:**
+>   - `429 / RESOURCE_EXHAUSTED` → "Quota exceeded — you have hit your Veo API rate limit."
+>   - RAI filtered (`raiMediaFilteredCount > 0`) → "Video was blocked by safety filters — `<reason>`"
+>   - No video returned → "Generation may have been filtered or failed silently."
+>   - `PERMISSION_DENIED` → "Permission denied — your API key does not have access."
+>   - `INVALID_ARGUMENT` → API message passed through.
+> - **Files:**
+>   - `src/services/gemini-video.ts`
+>   - `src/app/api/script/generate-video/route.ts`
+>   - `src/app/script/page.tsx`
 
 ---
 

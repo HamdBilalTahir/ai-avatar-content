@@ -14,18 +14,19 @@ const WORD_RANGES: Record<Duration, string> = {
 
 export async function generateScript(
   topic: string,
-  duration: Duration = '30s'
+  duration: Duration = '30s',
+  apiKey?: string
 ): Promise<string> {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    throw new Error('Missing environment variable: GEMINI_API_KEY');
+  const resolvedKey = apiKey || process.env.GEMINI_API_KEY;
+  if (!resolvedKey) {
+    throw new Error('Missing GEMINI_API_KEY');
   }
 
   const wordRange = WORD_RANGES[duration];
 
   const model = new ChatGoogleGenerativeAI({
     model: 'gemini-3-flash-preview',
-    apiKey,
+    apiKey: resolvedKey,
     temperature: 0.7,
   });
 

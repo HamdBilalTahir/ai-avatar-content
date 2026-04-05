@@ -76,6 +76,19 @@ export default function ScriptPage() {
     urlIndex: number;
     url: string;
   } | null>(null);
+  const [generationToast, setGenerationToast] = useState<string | null>(null);
+  const generationToastTimer = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  );
+  const showGenerationToast = (msg: string) => {
+    if (generationToastTimer.current)
+      clearTimeout(generationToastTimer.current);
+    setGenerationToast(msg);
+    generationToastTimer.current = setTimeout(
+      () => setGenerationToast(null),
+      7000
+    );
+  };
 
   const generatedMediaRef = useRef<HTMLDivElement>(null);
 
@@ -278,6 +291,19 @@ export default function ScriptPage() {
 
   return (
     <div className="flex flex-col lg:flex-row lg:h-full bg-slate-50 text-slate-900 lg:overflow-hidden font-sans w-full min-w-0 box-border relative">
+      {/* Generation error toast */}
+      {generationToast && (
+        <div className="fixed bottom-5 left-1/2 -translate-x-1/2 z-[9999] max-w-sm w-[calc(100%-2rem)] flex items-start gap-3 bg-red-600 text-white text-sm px-4 py-3 rounded-xl shadow-xl">
+          <span className="shrink-0 mt-0.5">⚠</span>
+          <span className="flex-1 leading-snug">{generationToast}</span>
+          <button
+            onClick={() => setGenerationToast(null)}
+            className="shrink-0 opacity-70 hover:opacity-100 text-base leading-none"
+          >
+            ✕
+          </button>
+        </div>
+      )}
       {/* Left Pane: Shots Accordion */}
       <div className="flex-1 lg:w-2/3 lg:max-w-[66.666667%] min-w-0 h-auto lg:h-full lg:overflow-y-auto overflow-x-hidden border-b lg:border-b-0 lg:border-r border-slate-200 p-4 lg:p-6 lg:pr-6 box-border">
         <div className="sticky top-0 z-20 bg-slate-50 -mx-4 lg:-mx-6 px-4 lg:px-6 pt-4 lg:pt-6 pb-4 border-b border-slate-200 mb-6">
@@ -1274,6 +1300,15 @@ export default function ScriptPage() {
               </div>
 
               <div>
+                {model === 'veo-3.1-lite-generate-preview' && (
+                  <div className="mb-2 flex items-start gap-2 rounded-lg bg-blue-50 border border-blue-200 px-3 py-2 text-xs text-blue-700">
+                    <span className="shrink-0 mt-0.5">ℹ</span>
+                    <span>
+                      Veo 3.1 Lite supports 1 image max per shot. Extra images
+                      are ignored.
+                    </span>
+                  </div>
+                )}
                 <label className="field-label">Model</label>
                 <select
                   value={model}
@@ -1284,6 +1319,9 @@ export default function ScriptPage() {
                     Veo 3.1 Fast
                   </option>
                   <option value="veo-3.1-generate-preview">Veo 3.1 Pro</option>
+                  <option value="veo-3.1-lite-generate-preview">
+                    Veo 3.1 Lite
+                  </option>
                 </select>
               </div>
 
@@ -1322,22 +1360,58 @@ export default function ScriptPage() {
                             );
                           });
 
-                          const res = await fetch(
-                            '/api/script/generate-video',
-                            {
-                              method: 'POST',
-                              headers: { 'Content-Type': 'application/json' },
-                              signal: controller.signal,
-                              body: JSON.stringify({
-                                prompt: finalPrompt,
-                                modelName: model,
-                                duration: shot.duration,
-                                resolution: shot.resolution,
-                                apiKey: apiKey,
-                                shotNumber: shot.shot_number,
-                              }),
-                            }
+                          // Resolve imageRefs → base64
+                          const resolvedImages = await Promise.all(
+                            shot.imageRefs
+                              .map((id) => images.find((img) => img.id === id))
+                              .filter(Boolean)
+                              .map(async (img) => {
+                                const buf = await img!.file.arrayBuffer();
+                                const base64 =
+                                  Buffer.from(buf).toString('base64');
+                                return {
+                                  base64,
+                                  mimeType: img!.file.type || 'image/jpeg',
+                                };
+                              })
                           );
+
+                          // Choose route based on model + image count
+                          // Lite: max 1 image via image-direct; no refs support
+                          // Fast/Pro: 0 → text, 1 → image-direct, 2-3 → image-refs
+                          const isLite =
+                            model === 'veo-3.1-lite-generate-preview';
+                          let route: string;
+                          let body: Record<string, unknown>;
+                          const base = {
+                            prompt: finalPrompt,
+                            modelName: model,
+                            duration: shot.duration,
+                            resolution: shot.resolution,
+                            apiKey,
+                            shotNumber: shot.shot_number,
+                          };
+
+                          if (resolvedImages.length === 0) {
+                            route = '/api/script/generate-video/text';
+                            body = base;
+                          } else if (isLite) {
+                            // Lite only supports image-direct (no refs API)
+                            route = '/api/script/generate-video/image-direct';
+                            body = { ...base, image: resolvedImages[0] };
+                          } else {
+                            // Fast/Pro: always use refs even with 1 image —
+                            // refs uses image as creative reference, prompt drives the scene
+                            route = '/api/script/generate-video/image-refs';
+                            body = { ...base, referenceImages: resolvedImages };
+                          }
+
+                          const res = await fetch(route, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            signal: controller.signal,
+                            body: JSON.stringify(body),
+                          });
 
                           const data = await res.json();
 
@@ -1371,9 +1445,11 @@ export default function ScriptPage() {
                                 ...newShots[i],
                                 status: 'error',
                               };
-                              console.error(
-                                'Failed to generate video:',
-                                data.error
+                              const msg =
+                                data.error || 'Video generation failed.';
+                              console.warn('Failed to generate video:', msg);
+                              showGenerationToast(
+                                `Shot ${shots[i].shot_number}: ${msg}`
                               );
                             }
                             return newShots;
@@ -1394,7 +1470,14 @@ export default function ScriptPage() {
                             };
                             return newShots;
                           });
-                          console.error('Error generating video:', error);
+                          const msg =
+                            error instanceof Error
+                              ? error.message
+                              : 'Unexpected error.';
+                          console.warn('Error generating video:', msg);
+                          showGenerationToast(
+                            `Shot ${shots[i].shot_number}: ${msg}`
+                          );
                         }
                       })
                     ).finally(() => {

@@ -13,10 +13,8 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const { avatar_prompt, negative_prompt, reference_images } = body as Record<
-    string,
-    unknown
-  >;
+  const { avatar_prompt, negative_prompt, reference_images, gemini_api_key } =
+    body as Record<string, unknown>;
 
   if (
     !avatar_prompt ||
@@ -54,10 +52,13 @@ export async function POST(req: NextRequest) {
   try {
     const negPrompt =
       typeof negative_prompt === 'string' ? negative_prompt : undefined;
+    const apiKey =
+      typeof gemini_api_key === 'string' ? gemini_api_key : undefined;
     const { image_base64, mime_type } = await generateAvatarImage(
       avatar_prompt,
       refs,
-      negPrompt
+      negPrompt,
+      apiKey
     );
     const response: AvatarGenerateResponse = { image_base64, mime_type };
     return NextResponse.json(response, { status: 200 });

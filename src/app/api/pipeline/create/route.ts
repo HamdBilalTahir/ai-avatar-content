@@ -27,6 +27,7 @@ export async function POST(req: NextRequest) {
     script: providedScript,
     voice_id,
     voice_style_override,
+    gemini_api_key,
   } = body as Record<string, unknown>;
 
   if (!topic || typeof topic !== 'string' || topic.trim() === '') {
@@ -77,6 +78,9 @@ export async function POST(req: NextRequest) {
       ? (voice_style_override as VoiceStyle)
       : undefined;
 
+  const apiKey =
+    typeof gemini_api_key === 'string' ? gemini_api_key : undefined;
+
   // Fire and forget — response is returned before pipeline runs
   runPipeline(
     job_id,
@@ -85,7 +89,8 @@ export async function POST(req: NextRequest) {
     image_base64,
     scriptOverride,
     voiceOverride,
-    styleOverride
+    styleOverride,
+    apiKey
   );
 
   return NextResponse.json({ job_id }, { status: 200 });
@@ -98,7 +103,8 @@ async function runPipeline(
   image_base64: string,
   scriptOverride?: string,
   voiceOverride?: string,
-  styleOverride?: VoiceStyle
+  styleOverride?: VoiceStyle,
+  apiKey?: string
 ): Promise<void> {
   const t = tag(job_id);
   console.log(`${t} Pipeline started`);
@@ -142,7 +148,7 @@ async function runPipeline(
       });
 
       try {
-        script = await generateScript(topic);
+        script = await generateScript(topic, '30s', apiKey);
         console.log(
           `${t} [1/3] Script generated (${script.length} chars, ~${script.trim().split(/\s+/).length} words)`
         );
@@ -184,7 +190,7 @@ async function runPipeline(
     } else {
       console.log(`${t} [2/3] Extracting voice style from topic via Gemini…`);
       try {
-        voiceStyle = await extractVoiceStyle(topic);
+        voiceStyle = await extractVoiceStyle(topic, apiKey);
         console.log(
           `${t} [2/3] Voice style — emotion: ${voiceStyle.emotion}, speed: ${voiceStyle.speed}, volume: ${voiceStyle.volume}`
         );

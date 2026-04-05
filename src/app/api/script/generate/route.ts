@@ -15,7 +15,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const { topic, duration } = body as Record<string, unknown>;
+  const { topic, duration, gemini_api_key } = body as Record<string, unknown>;
 
   if (!topic || typeof topic !== 'string' || topic.trim().length < 3) {
     return NextResponse.json({ error: 'topic is required' }, { status: 400 });
@@ -26,7 +26,13 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const script = await generateScript(topic.trim(), duration as Duration);
+    const apiKey =
+      typeof gemini_api_key === 'string' ? gemini_api_key : undefined;
+    const script = await generateScript(
+      topic.trim(),
+      duration as Duration,
+      apiKey
+    );
     return NextResponse.json({ script }, { status: 200 });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

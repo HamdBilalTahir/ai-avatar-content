@@ -7,14 +7,15 @@ const LIPSYNC_SUFFIX =
 export async function generateAvatarImage(
   avatarPrompt: string,
   referenceImages?: ReferenceImage[],
-  negativePrompt?: string
+  negativePrompt?: string,
+  apiKey?: string
 ): Promise<{ image_base64: string; mime_type: string }> {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    throw new Error('Missing environment variable: GEMINI_API_KEY');
+  const resolvedKey = apiKey || process.env.GEMINI_API_KEY;
+  if (!resolvedKey) {
+    throw new Error('Missing GEMINI_API_KEY');
   }
 
-  const genAI = new GoogleGenerativeAI(apiKey);
+  const genAI = new GoogleGenerativeAI(resolvedKey);
   const model = genAI.getGenerativeModel({
     model: 'gemini-3.1-flash-image-preview',
   });

@@ -240,6 +240,12 @@ export default function AvatarNewPage() {
   }, [topic]);
 
   async function handleGenerateScript() {
+    if (!geminiApiKey.trim()) {
+      setScriptGenerateError(
+        'Please enter a Gemini API Key first (top of page).'
+      );
+      return;
+    }
     if (!aiTopic.trim()) return;
     setScriptGenerateError(null);
     setIsGeneratingScript(true);
@@ -249,7 +255,11 @@ export default function AvatarNewPage() {
       const res = await fetch('/api/script/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ topic: aiTopic, duration: aiDuration }),
+        body: JSON.stringify({
+          topic: aiTopic,
+          duration: aiDuration,
+          gemini_api_key: geminiApiKey,
+        }),
       });
       const data = (await res.json()) as { script?: string; error?: string };
       if (!res.ok) throw new Error(data.error ?? 'Script generation failed');
@@ -319,6 +329,7 @@ export default function AvatarNewPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           avatar_prompt: avatarPrompt,
+          gemini_api_key: geminiApiKey,
           ...(negativePrompt.trim()
             ? { negative_prompt: negativePrompt.trim() }
             : {}),
@@ -428,17 +439,22 @@ export default function AvatarNewPage() {
   }
 
   async function handleStartPipeline() {
+    if (!geminiApiKey.trim()) {
+      setPipelineError('Please enter a Gemini API Key first (top of page).');
+      return;
+    }
     if (!imageBase64 || !topic.trim()) return;
     setPipelineError(null);
     setIsStartingPipeline(true);
 
     try {
       const resolvedVoice = customVoiceId.trim() || selectedVoiceId;
-      const body: PipelineCreateRequest = {
+      const body: PipelineCreateRequest & { gemini_api_key?: string } = {
         topic,
         avatar_prompt: avatarPrompt,
         image_base64: imageBase64,
         voice_id: resolvedVoice,
+        gemini_api_key: geminiApiKey,
         ...(voiceStyleMode === 'manual'
           ? {
               voice_style_override: {
