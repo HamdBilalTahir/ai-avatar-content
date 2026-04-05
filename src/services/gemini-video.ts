@@ -56,6 +56,8 @@ async function saveVideo(
     } catch {
       await fs.mkdir(dir, { recursive: true });
     }
+    const videoUri = response.generatedVideos[0].video.uri;
+    console.log(`✅ SUCCESS — generated video URL: ${videoUri}`);
     await ai.files.download({
       file: response.generatedVideos[0].video,
       downloadPath: outputName,

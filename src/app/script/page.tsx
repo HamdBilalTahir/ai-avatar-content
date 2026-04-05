@@ -141,7 +141,7 @@ export default function ScriptPage() {
                   .filter(
                     ([id]) =>
                       id.startsWith(`shot_${shot.shot_number}.`) ||
-                      id.startsWith(`shot_${shot.shot_number}_(`)
+                      id.startsWith(`shot_${shot.shot_number}_`)
                   )
                   .map(([, url]) => url);
                 if (matchingUrls.length === 0) return shot;
@@ -1406,9 +1406,15 @@ export default function ScriptPage() {
                             res.headers.get('content-type') || '';
                           if (res.ok && contentType.startsWith('video/')) {
                             const blob = await res.blob();
-                            const filename =
-                              res.headers.get('x-video-filename') ||
-                              `shot_${Date.now()}.mp4`;
+
+                            // Let the frontend manage multiple iterations so they don't overwrite each other in IndexedDB
+                            const existingCount =
+                              shots[i].generatedVideoUrls?.length || 0;
+                            let filename = `shot_${shots[i].shot_number}.mp4`;
+                            if (existingCount > 0) {
+                              filename = `shot_${shots[i].shot_number}_(${existingCount}).mp4`;
+                            }
+
                             try {
                               await saveGeneratedVideo(filename, blob);
                             } catch {

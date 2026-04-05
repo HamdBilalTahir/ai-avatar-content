@@ -6,6 +6,33 @@
 
 ---
 
+> ### Fix video overwriting in Generated Media
+>
+> - **What changed:** Fixed issue where new videos were overwriting older ones in the UI and IndexedDB on Vercel instances.
+> - **Why:** Vercel's stateless container behavior caused local file-name collisions, which now are uniquely tracked by timestamps internally and correctly incremented on the client.
+> - **Files:**
+>   - `src/lib/video-output.ts`
+>   - `src/app/script/page.tsx`
+
+---
+
+### ✨ Features
+
+---
+
+> ### Video Generation URL Logged
+>
+> - **What changed:** The `saveVideo` function now logs the generated video's direct URL (`response.generatedVideos[0].video.uri`) before downloading it.
+> - **Why:** Allows users to easily access the direct video URL from the terminal logs.
+> - **Files:**
+>   - `src/services/gemini-video.ts`
+
+---
+
+### 🐛 Fixes
+
+---
+
 > ### Video Generation API Returns Binary MP4 Stream
 >
 > - **What changed:** Modified the three video generation API routes (`/text`, `/image-direct`, `/image-refs`) to stream the generated MP4 file directly to the client as a `video/mp4` binary with appropriate headers (including `X-Video-Filename`) instead of returning a JSON object containing the `videoUrl`. The client (`src/app/script/page.tsx`) was updated to handle the binary response by converting it to a blob, creating a local object URL, and initiating download via a programmatic `<a>` tag rather than relying on navigation.
