@@ -1,8 +1,10 @@
 'use client';
 
-import React, { useState, useRef } from 'react';
+import React, { useState } from 'react';
 import Image from 'next/image';
 import * as initialData from './constants';
+import DeviceAwareUpload from '@/components/DeviceAwareUpload';
+import { ConfirmPopup } from '@/components/ConfirmPopup';
 
 type Shot = {
   shot_number: number;
@@ -52,8 +54,9 @@ export default function ScriptPage() {
   const [isApiPopupOpen, setIsApiPopupOpen] = useState(false);
   const [tempApiKey, setTempApiKey] = useState('');
   const [isCopied, setIsCopied] = useState(false);
-
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [shotToDelete, setShotToDelete] = useState<number | null>(null);
+  const [isDeletingAllVars, setIsDeletingAllVars] = useState(false);
+  const [varToDelete, setVarToDelete] = useState<number | null>(null);
 
   React.useEffect(() => {
     const savedShots = localStorage.getItem('podcast_shots');
@@ -223,20 +226,6 @@ export default function ScriptPage() {
     }
   };
 
-  // Allow uploading images to the library
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files.length > 0) {
-      const newImages = Array.from(e.target.files).map((file) => ({
-        id: Math.random().toString(36).substring(7),
-        file,
-        previewUrl: URL.createObjectURL(file),
-      }));
-      setImages((prev) => [...prev, ...newImages]);
-    }
-    // reset input
-    if (fileInputRef.current) fileInputRef.current.value = '';
-  };
-
   // Update a specific shot
   const updateShot = (index: number, updates: Partial<Shot>) => {
     const newShots = [...shots];
@@ -253,10 +242,10 @@ export default function ScriptPage() {
   };
 
   return (
-    <div className="flex flex-col lg:flex-row h-full bg-slate-50 text-slate-900 overflow-y-auto lg:overflow-hidden font-sans">
+    <div className="flex flex-col lg:flex-row lg:h-full bg-slate-50 text-slate-900 lg:overflow-hidden font-sans w-full min-w-0 box-border relative">
       {/* Left Pane: Shots Accordion */}
-      <div className="w-full lg:w-2/3 h-auto lg:h-full lg:overflow-y-auto border-b lg:border-b-0 lg:border-r border-slate-200 p-4 lg:p-6">
-        <div className="sticky top-0 z-50 bg-slate-50 -mx-4 lg:-mx-6 px-4 lg:px-6 pt-4 lg:pt-6 pb-4 border-b border-slate-200 mb-6">
+      <div className="flex-1 lg:w-2/3 lg:max-w-[66.666667%] min-w-0 h-auto lg:h-full lg:overflow-y-auto overflow-x-hidden border-b lg:border-b-0 lg:border-r border-slate-200 p-4 lg:p-6 lg:pr-6 box-border">
+        <div className="sticky top-0 z-20 bg-slate-50 -mx-4 lg:-mx-6 px-4 lg:px-6 pt-4 lg:pt-6 pb-4 border-b border-slate-200 mb-6">
           <h1 className="text-xl lg:text-2xl font-bold text-slate-900 leading-none">
             Video Script Editor
           </h1>
@@ -292,17 +281,7 @@ export default function ScriptPage() {
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
-                          if (
-                            confirm(
-                              'Are you sure you want to delete all variables?'
-                            )
-                          ) {
-                            setGlobals([]);
-                            localStorage.setItem(
-                              'podcast_globals',
-                              JSON.stringify([])
-                            );
-                          }
+                          setIsDeletingAllVars(true);
                         }}
                         className="text-sm px-3 py-1 bg-red-50 text-red-600 hover:bg-red-100 rounded-lg transition-colors font-medium"
                       >
@@ -455,17 +434,7 @@ export default function ScriptPage() {
                             </svg>
                           </button>
                           <button
-                            onClick={() => {
-                              if (confirm('Delete this variable?')) {
-                                const newG = [...globals];
-                                newG.splice(i, 1);
-                                setGlobals(newG);
-                                localStorage.setItem(
-                                  'podcast_globals',
-                                  JSON.stringify(newG)
-                                );
-                              }
-                            }}
+                            onClick={() => setVarToDelete(i)}
                             className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors"
                             title="Remove variable"
                           >
@@ -531,7 +500,7 @@ export default function ScriptPage() {
           </div>
 
           {isShotsExpanded && (
-            <div className="space-y-4 pb-32 relative">
+            <div className="space-y-4 pb-32 relative w-full">
               {!isLoaded ? (
                 <div className="text-slate-500">Loading...</div>
               ) : (
@@ -541,10 +510,10 @@ export default function ScriptPage() {
                   return (
                     <div
                       key={index}
-                      className={`border rounded-xl overflow-hidden transition-all ${
+                      className={`border rounded-xl transition-all ${
                         isExpanded
-                          ? 'bg-[#fafafa] shadow-[0_2px_12px_rgba(0,0,0,0.08)]'
-                          : 'bg-white shadow-sm'
+                          ? 'bg-[#fafafa] shadow-[0_2px_12px_rgba(0,0,0,0.08)] overflow-visible relative z-10'
+                          : 'bg-white shadow-sm overflow-hidden relative z-0'
                       } ${
                         shot.selected
                           ? 'border-violet-400 ring-1 ring-violet-400'
@@ -606,13 +575,7 @@ export default function ScriptPage() {
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
-                              if (
-                                confirm(
-                                  `Are you sure you want to delete Shot ${shot.shot_number}?`
-                                )
-                              ) {
-                                removeShot(index);
-                              }
+                              setShotToDelete(index);
                             }}
                             className="text-slate-400 hover:text-red-500 px-2 py-1 transition-colors text-sm"
                             title="Delete shot"
@@ -628,12 +591,12 @@ export default function ScriptPage() {
                       {/* Accordion Content */}
                       {isExpanded && (
                         <div className="p-4 border-t border-slate-100 space-y-4 bg-slate-50/50">
-                          <div className="flex flex-col sm:flex-row gap-4 mb-4">
-                            <div className="flex-1">
-                              <label className="field-label">
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4 w-full box-border">
+                            <div className="min-w-0">
+                              <label className="field-label break-words">
                                 Duration (s)
                               </label>
-                              <div className="flex gap-2">
+                              <div className="grid grid-cols-2 gap-2 w-full box-border">
                                 {[4, 8].map((dur) => (
                                   <button
                                     key={dur}
@@ -652,9 +615,11 @@ export default function ScriptPage() {
                                 ))}
                               </div>
                             </div>
-                            <div className="flex-1">
-                              <label className="field-label">Resolution</label>
-                              <div className="flex gap-2">
+                            <div className="min-w-0">
+                              <label className="field-label break-words">
+                                Resolution
+                              </label>
+                              <div className="grid grid-cols-3 gap-2 w-full box-border">
                                 {['720p', '1080p', '4k'].map((res) => (
                                   <button
                                     key={res}
@@ -674,22 +639,24 @@ export default function ScriptPage() {
                             </div>
                           </div>
 
-                          <div>
-                            <label className="field-label">Prompt</label>
+                          <div className="w-full box-border">
+                            <label className="field-label break-words">
+                              Prompt
+                            </label>
                             <textarea
                               value={shot.prompt}
                               onChange={(e) =>
                                 updateShot(index, { prompt: e.target.value })
                               }
-                              className="w-full h-80 bg-white border border-slate-200 rounded-lg p-3 text-sm text-slate-700 shadow-sm focus:outline-none focus:border-violet-500 focus:ring-1 focus:ring-violet-500"
+                              className="w-full box-border h-80 bg-white border border-slate-200 rounded-lg p-3 text-sm text-slate-700 shadow-sm focus:outline-none focus:border-violet-500 focus:ring-1 focus:ring-violet-500 break-words"
                             />
                           </div>
 
-                          <div>
-                            <label className="field-label">
+                          <div className="w-full box-border">
+                            <label className="field-label break-words">
                               Attached Images
                             </label>
-                            <div className="flex flex-wrap gap-2">
+                            <div className="flex flex-wrap gap-2 max-w-full overflow-hidden">
                               {shot.imageRefs.map((refId, i) => {
                                 const img = images.find(
                                   (img) => img.id === refId
@@ -728,42 +695,30 @@ export default function ScriptPage() {
                                 );
                               })}
 
-                              <label className="w-16 h-16 flex flex-col items-center justify-center rounded-lg border-2 border-dashed border-slate-200 cursor-pointer hover:border-violet-400 hover:bg-violet-50 transition-colors text-slate-400 hover:text-violet-600 bg-white">
-                                <span className="text-xl leading-none">+</span>
-                                <input
-                                  type="file"
-                                  multiple
-                                  accept="image/*"
-                                  className="hidden"
-                                  onChange={(e) => {
-                                    if (
-                                      e.target.files &&
-                                      e.target.files.length > 0
-                                    ) {
-                                      const newImages = Array.from(
-                                        e.target.files
-                                      ).map((file) => ({
-                                        id: Math.random()
-                                          .toString(36)
-                                          .substring(7),
-                                        file,
-                                        previewUrl: URL.createObjectURL(file),
-                                      }));
-                                      setImages((prev) => [
-                                        ...prev,
-                                        ...newImages,
-                                      ]);
-                                      updateShot(index, {
-                                        imageRefs: [
-                                          ...shot.imageRefs,
-                                          ...newImages.map((img) => img.id),
-                                        ],
-                                      });
-                                    }
-                                    e.target.value = '';
-                                  }}
-                                />
-                              </label>
+                              <DeviceAwareUpload
+                                onUpload={(files) => {
+                                  const newImages = files.map((file) => ({
+                                    id: Math.random().toString(36).substring(7),
+                                    file,
+                                    previewUrl: URL.createObjectURL(file),
+                                  }));
+                                  setImages((prev) => [...prev, ...newImages]);
+                                  updateShot(index, {
+                                    imageRefs: [
+                                      ...shot.imageRefs,
+                                      ...newImages.map((img) => img.id),
+                                    ],
+                                  });
+                                }}
+                                onOpenLibrary={() => setIsLibraryExpanded(true)}
+                                hasLibraryImages={images.length > 0}
+                              >
+                                <div className="w-16 h-16 flex flex-col items-center justify-center rounded-lg border-2 border-dashed border-slate-200 cursor-pointer hover:border-violet-400 hover:bg-violet-50 transition-colors text-slate-400 hover:text-violet-600 bg-white">
+                                  <span className="text-xl leading-none">
+                                    +
+                                  </span>
+                                </div>
+                              </DeviceAwareUpload>
                             </div>
                             <div className="mt-2 text-[11px] text-slate-400">
                               Click the + button to upload and attach directly,
@@ -793,7 +748,7 @@ export default function ScriptPage() {
       </div>
 
       {/* Right Pane: Settings & Library */}
-      <div className="w-full lg:w-1/3 h-auto lg:h-full bg-white lg:border-t lg:border-t-0 lg:border-l border-slate-200 flex flex-col lg:overflow-hidden shadow-sm z-10">
+      <div className="w-full lg:w-1/3 lg:max-w-[33.333333%] min-w-0 h-auto lg:h-full bg-white lg:border-t lg:border-t-0 lg:border-l border-slate-200 flex flex-col lg:overflow-hidden shadow-sm box-border lg:order-last">
         {/* Generation Settings */}
         <div className="p-6 border-b border-slate-100 bg-slate-50/50 flex-shrink-0 transition-all">
           <div
@@ -1054,27 +1009,28 @@ export default function ScriptPage() {
               </span>
             </h2>
             <div className="flex items-center gap-3">
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  fileInputRef.current?.click();
-                }}
-                className="text-sm px-3 py-1 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-lg transition-colors font-medium shadow-sm"
-              >
-                + Upload
-              </button>
+              <div onClick={(e) => e.stopPropagation()}>
+                <DeviceAwareUpload
+                  onUpload={(files) => {
+                    const newImages = files.map((file) => ({
+                      id: Math.random().toString(36).substring(7),
+                      file,
+                      previewUrl: URL.createObjectURL(file),
+                    }));
+                    setImages((prev) => [...prev, ...newImages]);
+                  }}
+                  onOpenLibrary={() => setIsLibraryExpanded(true)}
+                  hasLibraryImages={images.length > 0}
+                >
+                  <div className="text-sm px-3 py-1 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-lg transition-colors font-medium shadow-sm">
+                    + Upload
+                  </div>
+                </DeviceAwareUpload>
+              </div>
               <div className="text-slate-400">
                 {isLibraryExpanded ? '▼' : '▶'}
               </div>
             </div>
-            <input
-              type="file"
-              multiple
-              accept="image/*"
-              className="hidden"
-              ref={fileInputRef}
-              onChange={handleFileUpload}
-            />
           </div>
 
           {isLibraryExpanded &&
@@ -1082,15 +1038,24 @@ export default function ScriptPage() {
               <div className="flex flex-col items-center justify-center text-slate-500 text-sm py-8 border border-dashed border-slate-300 rounded-lg bg-slate-50 gap-3">
                 <span className="text-3xl">📷</span>
                 <div>No images uploaded yet.</div>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    fileInputRef.current?.click();
-                  }}
-                  className="text-sm px-4 py-2 bg-white border border-slate-200 hover:bg-violet-50 text-violet-700 hover:border-violet-300 rounded-lg transition-colors font-medium shadow-sm mt-1"
-                >
-                  + Upload your first image
-                </button>
+                <div onClick={(e) => e.stopPropagation()}>
+                  <DeviceAwareUpload
+                    onUpload={(files) => {
+                      const newImages = files.map((file) => ({
+                        id: Math.random().toString(36).substring(7),
+                        file,
+                        previewUrl: URL.createObjectURL(file),
+                      }));
+                      setImages((prev) => [...prev, ...newImages]);
+                    }}
+                    onOpenLibrary={() => setIsLibraryExpanded(true)}
+                    hasLibraryImages={images.length > 0}
+                  >
+                    <div className="text-sm px-4 py-2 bg-white border border-slate-200 hover:bg-violet-50 text-violet-700 hover:border-violet-300 rounded-lg transition-colors font-medium shadow-sm mt-1">
+                      + Upload your first image
+                    </div>
+                  </DeviceAwareUpload>
+                </div>
               </div>
             ) : (
               <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-5 gap-4 overflow-y-auto max-h-64 pr-2">
@@ -1129,7 +1094,7 @@ export default function ScriptPage() {
 
         {/* Generated Media (Stacked in a grid) */}
         {/* Generated Media (Stacked in a grid) */}
-        <div className="p-4 lg:p-6 flex-1 min-h-0 flex flex-col pb-20 lg:pb-6 transition-all">
+        <div className="p-4 lg:p-6 flex-1 min-h-0 flex flex-col pb-20 lg:pb-6 transition-all min-h-[50vh] lg:min-h-0">
           <div
             className="flex items-center justify-between mb-4 cursor-pointer"
             onClick={() => setIsMediaExpanded(!isMediaExpanded)}
@@ -1348,6 +1313,47 @@ export default function ScriptPage() {
           </div>
         </div>
       )}
+
+      <ConfirmPopup
+        isOpen={shotToDelete !== null}
+        title="Delete Shot"
+        message={`Are you sure you want to delete Shot ${shotToDelete !== null ? shots[shotToDelete]?.shot_number : ''}?`}
+        onConfirm={() => {
+          if (shotToDelete !== null) {
+            removeShot(shotToDelete);
+            setShotToDelete(null);
+          }
+        }}
+        onCancel={() => setShotToDelete(null)}
+      />
+
+      <ConfirmPopup
+        isOpen={isDeletingAllVars}
+        title="Delete All Variables"
+        message="Are you sure you want to delete all variables?"
+        onConfirm={() => {
+          setGlobals([]);
+          localStorage.setItem('podcast_globals', JSON.stringify([]));
+          setIsDeletingAllVars(false);
+        }}
+        onCancel={() => setIsDeletingAllVars(false)}
+      />
+
+      <ConfirmPopup
+        isOpen={varToDelete !== null}
+        title="Delete Variable"
+        message={`Are you sure you want to delete the variable "${varToDelete !== null ? globals[varToDelete]?.name : ''}"?`}
+        onConfirm={() => {
+          if (varToDelete !== null) {
+            const newG = [...globals];
+            newG.splice(varToDelete, 1);
+            setGlobals(newG);
+            localStorage.setItem('podcast_globals', JSON.stringify(newG));
+            setVarToDelete(null);
+          }
+        }}
+        onCancel={() => setVarToDelete(null)}
+      />
 
       {/* API Key Modal */}
       {isApiPopupOpen && (

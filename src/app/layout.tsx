@@ -1,3 +1,4 @@
+import React from 'react';
 import type { Metadata } from 'next';
 import { Geist, Geist_Mono } from 'next/font/google';
 import AppSidebar from '@/components/AppSidebar';
@@ -29,7 +30,9 @@ export default function RootLayout({
         className={`${geistSans.variable} ${geistMono.variable} antialiased flex h-screen overflow-hidden`}
       >
         <AppSidebar />
-        <main className="flex-1 overflow-auto">{children}</main>
+        <main className="flex-1 min-w-0 overflow-x-hidden overflow-y-auto">
+          {children}
+        </main>
       </body>
     </html>
   );

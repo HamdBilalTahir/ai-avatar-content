@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
+import DeviceAwareUpload from '@/components/DeviceAwareUpload';
 import NextImage from 'next/image';
 import type {
   AvatarGenerateResponse,
@@ -101,8 +102,6 @@ export default function AvatarNewPage() {
   const [scriptSuccessBanner, setScriptSuccessBanner] = useState(false);
 
   const cycleRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const refImageInputRef = useRef<HTMLInputElement>(null);
   const successTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ── Restore draft from localStorage on mount ───────────────────────────────
@@ -253,8 +252,7 @@ export default function AvatarNewPage() {
     }
   }
 
-  function handleAddReferenceImages(e: React.ChangeEvent<HTMLInputElement>) {
-    const files = Array.from(e.target.files ?? []);
+  function handleAddReferenceImagesFiles(files: File[]) {
     if (!files.length) return;
     files.forEach((file) => {
       if (referenceImages.length >= 10) return;
@@ -269,7 +267,6 @@ export default function AvatarNewPage() {
       };
       reader.readAsDataURL(file);
     });
-    e.target.value = '';
   }
 
   function handleRemoveReferenceImage(index: number) {
@@ -375,25 +372,6 @@ export default function AvatarNewPage() {
         navigator.clipboard.write([new ClipboardItem({ 'image/png': pngBlob })])
       )
       .catch(() => {});
-  }
-
-  function handleImport(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = reader.result as string;
-      // result is "data:<mime>;base64,<data>"
-      const [meta, data] = result.split(',');
-      const mime = meta.replace('data:', '').replace(';base64', '');
-      setImageBase64(data);
-      setMimeType(mime);
-      setGenerationCount((c) => c + 1);
-      setAvatarError(null);
-    };
-    reader.readAsDataURL(file);
-    // Reset so the same file can be re-imported
-    e.target.value = '';
   }
 
   function handleNewSession() {
@@ -703,28 +681,36 @@ export default function AvatarNewPage() {
                     </span>
                   </div>
                   {referenceImages.length < 10 && (
-                    <button
-                      type="button"
-                      onClick={() => refImageInputRef.current?.click()}
-                      disabled={isGeneratingAvatar}
-                      className="flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-600 transition hover:border-violet-300 hover:text-violet-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    <DeviceAwareUpload
+                      onUpload={handleAddReferenceImagesFiles}
+                      className="inline-block"
                     >
-                      <UploadIcon />
-                      Upload
-                    </button>
+                      <button
+                        type="button"
+                        disabled={isGeneratingAvatar}
+                        className="flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-600 transition hover:border-violet-300 hover:text-violet-700 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        <UploadIcon />
+                        Upload
+                      </button>
+                    </DeviceAwareUpload>
                   )}
                 </div>
 
                 {referenceImages.length === 0 ? (
-                  <button
-                    type="button"
-                    onClick={() => refImageInputRef.current?.click()}
-                    disabled={isGeneratingAvatar}
-                    className="flex w-full items-center justify-center gap-2 rounded-xl border-2 border-dashed border-slate-200 bg-slate-50 py-5 text-xs text-slate-400 transition hover:border-violet-300 hover:text-violet-500 disabled:cursor-not-allowed disabled:opacity-50"
+                  <DeviceAwareUpload
+                    onUpload={handleAddReferenceImagesFiles}
+                    className="w-full"
                   >
-                    <UploadIcon />
-                    Upload reference photos to guide likeness
-                  </button>
+                    <button
+                      type="button"
+                      disabled={isGeneratingAvatar}
+                      className="flex w-full items-center justify-center gap-2 rounded-xl border-2 border-dashed border-slate-200 bg-slate-50 py-5 text-xs text-slate-400 transition hover:border-violet-300 hover:text-violet-500 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      <UploadIcon />
+                      Upload reference photos to guide likeness
+                    </button>
+                  </DeviceAwareUpload>
                 ) : (
                   <div className="flex flex-wrap gap-2">
                     {referenceImages.map((img, i) => (
@@ -750,15 +736,19 @@ export default function AvatarNewPage() {
                       </div>
                     ))}
                     {referenceImages.length < 10 && (
-                      <button
-                        type="button"
-                        onClick={() => refImageInputRef.current?.click()}
-                        disabled={isGeneratingAvatar}
-                        className="h-16 w-16 flex items-center justify-center rounded-lg border-2 border-dashed border-slate-200 bg-slate-50 text-slate-400 transition hover:border-violet-300 hover:text-violet-500 disabled:cursor-not-allowed disabled:opacity-50"
-                        title="Add another reference"
+                      <DeviceAwareUpload
+                        onUpload={handleAddReferenceImagesFiles}
+                        className="h-16 w-16"
                       >
-                        <span className="text-lg leading-none">+</span>
-                      </button>
+                        <button
+                          type="button"
+                          disabled={isGeneratingAvatar}
+                          className="h-16 w-16 flex items-center justify-center rounded-lg border-2 border-dashed border-slate-200 bg-slate-50 text-slate-400 transition hover:border-violet-300 hover:text-violet-500 disabled:cursor-not-allowed disabled:opacity-50"
+                          title="Add another reference"
+                        >
+                          <span className="text-lg leading-none">+</span>
+                        </button>
+                      </DeviceAwareUpload>
                     )}
                   </div>
                 )}
@@ -776,21 +766,6 @@ export default function AvatarNewPage() {
             </div>
 
             {/* Generate / Regenerate + Import buttons */}
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="image/*"
-              className="hidden"
-              onChange={handleImport}
-            />
-            <input
-              ref={refImageInputRef}
-              type="file"
-              accept="image/*"
-              multiple
-              className="hidden"
-              onChange={handleAddReferenceImages}
-            />
             <div className="flex gap-3">
               {!imageBase64 ? (
                 <button
@@ -823,15 +798,35 @@ export default function AvatarNewPage() {
                   )}
                 </button>
               )}
-              <button
-                onClick={() => fileInputRef.current?.click()}
-                disabled={isGeneratingAvatar}
-                title="Import an existing avatar image"
-                className="flex items-center justify-center gap-1.5 rounded-xl border-2 border-slate-200 bg-white px-4 py-3.5 text-sm font-semibold text-slate-600 transition hover:border-slate-300 hover:bg-slate-50 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
+              <DeviceAwareUpload
+                onUpload={(files) => {
+                  if (files.length > 0) {
+                    const file = files[0];
+                    const reader = new FileReader();
+                    reader.onload = () => {
+                      const result = reader.result as string;
+                      const [meta, data] = result.split(',');
+                      const mime = meta
+                        .replace('data:', '')
+                        .replace(';base64', '');
+                      setImageBase64(data);
+                      setMimeType(mime);
+                      setGenerationCount((c) => c + 1);
+                      setAvatarError(null);
+                    };
+                    reader.readAsDataURL(file);
+                  }
+                }}
               >
-                <UploadIcon />
-                Import
-              </button>
+                <button
+                  disabled={isGeneratingAvatar}
+                  title="Import an existing avatar image"
+                  className="flex h-full items-center justify-center gap-1.5 rounded-xl border-2 border-slate-200 bg-white px-4 py-3.5 text-sm font-semibold text-slate-600 transition hover:border-slate-300 hover:bg-slate-50 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <UploadIcon />
+                  Import
+                </button>
+              </DeviceAwareUpload>
             </div>
 
             {/* Cycling status message */}

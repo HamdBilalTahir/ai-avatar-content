@@ -1,6 +1,7 @@
 'use client';
 import { useState } from 'react';
 import { useEditor } from '../store';
+import { ConfirmPopup } from '@/components/ConfirmPopup';
 
 function uid() {
   return Math.random().toString(36).slice(2, 10);
@@ -10,6 +11,7 @@ export default function ProjectsPanel() {
   const { state, dispatch, activeProject } = useEditor();
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
+  const [projectToDelete, setProjectToDelete] = useState<string | null>(null);
 
   function createProject() {
     const id = uid();
@@ -37,12 +39,24 @@ export default function ProjectsPanel() {
   }
 
   function deleteProject(id: string) {
-    if (!confirm('Delete this project?')) return;
-    dispatch({ type: 'DELETE_PROJECT', projectId: id });
+    setProjectToDelete(id);
   }
 
   return (
     <div className="flex flex-col h-full">
+      <ConfirmPopup
+        isOpen={projectToDelete !== null}
+        title="Delete Project"
+        message={`Are you sure you want to delete this project?`}
+        onConfirm={() => {
+          if (projectToDelete) {
+            dispatch({ type: 'DELETE_PROJECT', projectId: projectToDelete });
+            setProjectToDelete(null);
+          }
+        }}
+        onCancel={() => setProjectToDelete(null)}
+      />
+
       {/* Header */}
       <div className="px-4 py-3 border-b border-slate-200">
         <h2 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">

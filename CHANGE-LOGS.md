@@ -2,7 +2,133 @@
 
 ---
 
+### ✨ Features
+
+---
+
+> ### Camera Flow with Live Viewfinder and Accept/Reject Preview
+>
+> - **What changed:** Tapping Camera on mobile now opens a full-screen web camera overlay (via `getUserMedia`) instead of delegating to the native input capture. A large shutter button captures the frame. The user is then shown the still preview with **Retake** and **Use Photo** buttons — accepting converts the canvas frame to a `File` and calls `onUpload`, rejecting restarts the live stream. The overlay is rendered via a React portal into `document.body` so it sits above all stacking contexts.
+> - **Why:** Native `input capture` hands control to the OS camera app with no in-app preview step. The web camera approach keeps the accept/reject flow inside the product.
+> - **Files:**
+>   - `src/components/DeviceAwareUpload.tsx`
+
+---
+
+> ### Gallery and File Options Open Correct OS Pickers on Mobile
+>
+> - **What changed:** Gallery now uses `input.accept = "image/*"` without a `capture` attribute — on iOS and Android this opens the photo gallery picker directly. File now uses `input.accept = "*/*"` — this opens the OS file browser (Files app on iOS, file manager on Android). Both support multi-select.
+> - **Why:** Previously both options shared the same generic file input with no differentiation, so they behaved identically and neither specifically targeted the gallery or file browser.
+> - **Files:**
+>   - `src/components/DeviceAwareUpload.tsx`
+
+---
+
+### 💅 UI Improvements
+
+---
+
+> ### Image Library Option Hidden When Library Is Empty
+>
+> - **What changed:** The "Image Library" option (renamed from "Image Media") is now hidden in both the desktop dropdown and mobile bottom sheet when no images have been uploaded yet (`images.length === 0`). It reappears automatically once at least one image exists. All three `DeviceAwareUpload` usages in the script page pass `hasLibraryImages={images.length > 0}`.
+> - **Why:** Showing a library picker when the library is empty is confusing and leads to a dead end.
+> - **Files:**
+>   - `src/components/DeviceAwareUpload.tsx`
+>   - `src/app/script/page.tsx`
+
+---
+
+### 🐛 Fixes
+
+---
+
+> ### Mobile Overlay Z-Index — Bottom Sheet Now Covers Sticky Headers
+>
+> - **What changed:** The `DeviceAwareUpload` mobile bottom sheet is now rendered via `ReactDOM.createPortal` into `document.body`, completely escaping `main`'s stacking context. Previously, sticky headers (`z-20`, `z-40`) inside `main` (which has `overflow-x-hidden overflow-y-auto`) were rendering above the `fixed` overlay even at `z-[9999]` because `position: sticky` always creates its own stacking context regardless of z-index value.
+> - **Why:** CSS stacking context containment — `fixed` descendants of overflow containers do not always paint at the root stacking level in all browsers. Portal sidesteps this entirely.
+> - **Files:**
+>   - `src/components/DeviceAwareUpload.tsx`
+
+---
+
+> ### Script Page — Mobile Layout Shows Shots First, Settings Below
+>
+> - **What changed:** Removed `h-full` from the root container on mobile (now `lg:h-full`) so both panels can render their full content height and the page scrolls naturally via `main`'s existing `overflow-y-auto`. Removed `order-first` from the right (Settings) panel so the Shots/Script panel appears first on mobile in DOM order.
+> - **Why:** `h-full flex-col` on mobile constrained total height to the viewport. The right panel's `order-first` consumed all visible space, leaving the Shots panel below the fold with no way to reach it.
+> - **Files:**
+>   - `src/app/script/page.tsx`
+
+---
+
+> ### Script Page — `overflow-hidden` Clipping Shot Cards Removed
+>
+> - **What changed:** Removed `overflow-hidden` from the shots container div. Added `z-20` to the sticky page title so it stays above expanded shot cards (`z-10`) while scrolling.
+> - **Why:** `overflow-hidden` on a parent clips `overflow-visible` children, causing expanded shot accordion cards to be cut off at the container boundary.
+> - **Files:**
+>   - `src/app/script/page.tsx`
+
+---
+
+> ### VS Code — Suppress `@theme` Unknown At-Rule Warning
+>
+> - **What changed:** Created `.vscode/settings.json` with `"css.lint.unknownAtRules": "ignore"`.
+> - **Why:** Tailwind CSS v4 uses the `@theme` directive which the VS Code built-in CSS language server does not recognise, producing a spurious warning on `globals.css`.
+> - **Files:**
+>   - `.vscode/settings.json`
+
+---
+
+### 🐛 Fixes
+
+---
+
+> ### Video Script Editor — Accordion Layout Fix
+>
+> - **What changed:** Fixed the Shots Accordion layout in the Script Editor by making the parent container `relative`, ensuring the left pane is a `block`, and adding `order-first lg:order-last` to ensure the layout functions properly on mobile and desktop without hiding elements.
+> - **Why:** The Shots Accordion was hidden/clipped because the layout styling was broken, particularly on responsive screens.
+> - **Files:**
+>   - `src/app/script/page.tsx`
+
+---
+
+> ### Video Script Editor — Desktop Layout and Overflow Fixes
+>
+> - **What changed:** Fixed the main content column width by ensuring the layout `main` uses `min-w-0 overflow-x-hidden`. Updated `DeviceAwareUpload` dropdown to use `max-w-[100vw] sm:max-w-xs z-50`. Added `pr-6` to the right pane to ensure padding. Used `break-words` and `box-border` for textarea and DURATION selector rows to prevent right-edge clipping.
+> - **Why:** On desktop, the main content area was overflowing to the right, causing the PROMPT textarea, DURATION selector row, and upload dropdowns to clip at the screen boundary.
+> - **Files:**
+>   - `src/app/layout.tsx`
+>   - `src/app/script/page.tsx`
+>   - `src/components/DeviceAwareUpload.tsx`
+
+---
+
+### ✨ Features
+
+---
+
+> ### Device-Aware Upload Experience
+>
+> - **What changed:** Implemented a reusable `DeviceAwareUpload` component that detects screen width dynamically. On desktop, it renders a popover dropdown under the trigger button (Image Media, Local Directory). On mobile, it displays a native-feeling bottom sheet with an overlay (Image Media, Gallery, File, Camera). Integrated into the Image Library and shot card attachments.
+> - **Why:** Provides a tailored, native-like upload experience on mobile devices while keeping a compact dropdown approach on desktop viewports.
+> - **Files:**
+>   - `src/components/DeviceAwareUpload.tsx`
+>   - `src/app/avatar/new/page.tsx`
+>   - `src/app/script/page.tsx`
+
+---
+
 ### 💅 Styling and UI Improvements
+
+---
+
+> ### Consistent Custom Confirm Popups
+>
+> - **What changed:** Replaced all native browser `window.confirm` dialogs with a custom, theme-consistent `ConfirmPopup` component across the application (deleting shots, clearing variables, and deleting projects).
+> - **Why:** The native browser popups felt disjointed and interrupted the app's clean UI design. The custom modal perfectly matches the light theme, complete with backdrop blur, rounded corners, and consistent action buttons.
+> - **Files:**
+>   - `src/components/ConfirmPopup.tsx`
+>   - `src/app/script/page.tsx`
+>   - `src/app/video-maker/_components/ProjectsPanel.tsx`
 
 ---
 
