@@ -6,6 +6,16 @@ import * as initialData from './constants';
 import DeviceAwareUpload from '@/components/DeviceAwareUpload';
 import { ConfirmPopup } from '@/components/ConfirmPopup';
 import PromptEditor from '@/components/PromptEditor';
+import {
+  saveGeneratedVideo,
+  loadAllGeneratedVideos,
+  deleteGeneratedVideo,
+} from '@/lib/generatedVideosDb';
+import {
+  saveImageToLibrary,
+  loadAllLibraryImages,
+  deleteLibraryImage,
+} from '@/lib/imageLibraryDb';
 
 type Shot = {
   shot_number: number;
@@ -118,81 +128,39 @@ export default function ScriptPage() {
 
         setShots(resetShots);
 
-        // Check for existing generated videos in the background
-        resetShots.forEach(async (shot: Shot, index: number) => {
-          let urls: string[] = [];
+        // Restore generated videos from IndexedDB (works on Vercel where /tmp is ephemeral)
+        loadAllGeneratedVideos()
+          .then((stored) => {
+            if (stored.length === 0) return;
+            // Build a map: filename → blobUrl
+            const blobMap = new Map(stored.map((v) => [v.id, v.blobUrl]));
 
-          // Helper to sequentially check for files
-          const checkFiles = async () => {
-            // Check base file
-            const baseUrl = `/generated/shot_${shot.shot_number}.mp4`;
-            try {
-              const res = await fetch(baseUrl, { method: 'HEAD' });
-              if (res.ok) {
-                urls.push(baseUrl);
-              }
-            } catch {
-              // file doesn't exist
-            }
-
-            // Check numbered files
-            let counter = 1;
-            while (true) {
-              // Try with space first (new format), then fallback to no space (old format)
-              const newFormatUrl = `/generated/shot_${shot.shot_number} (${counter}).mp4`;
-              const oldFormatUrl = `/generated/shot_${shot.shot_number}(${counter}).mp4`;
-
-              try {
-                let found = false;
-
-                let res = await fetch(newFormatUrl, { method: 'HEAD' });
-                if (res.ok) {
-                  urls.push(newFormatUrl);
-                  found = true;
-                } else {
-                  res = await fetch(oldFormatUrl, { method: 'HEAD' });
-                  if (res.ok) {
-                    urls.push(oldFormatUrl);
-                    found = true;
-                  }
-                }
-
-                if (found) {
-                  counter++;
-                } else {
-                  break;
-                }
-              } catch {
-                break;
-              }
-            }
-
-            if (urls.length > 0) {
-              setShots((prev) => {
-                const newShots = [...prev];
-                // Update urls list, merge with existing if any to avoid duplicates
-                const existingUrls = newShots[index].generatedVideoUrls || [];
-                const mergedUrls = Array.from(
-                  new Set([...existingUrls, ...urls])
+            setShots((prev) =>
+              prev.map((shot) => {
+                const matchingUrls = [...blobMap.entries()]
+                  .filter(
+                    ([id]) =>
+                      id.startsWith(`shot_${shot.shot_number}.`) ||
+                      id.startsWith(`shot_${shot.shot_number}_(`)
+                  )
+                  .map(([, url]) => url);
+                if (matchingUrls.length === 0) return shot;
+                const merged = Array.from(
+                  new Set([...(shot.generatedVideoUrls || []), ...matchingUrls])
                 );
-
-                newShots[index] = {
-                  ...newShots[index],
-                  generatedVideoUrls: mergedUrls,
-                  generatedVideoUrl: mergedUrls[mergedUrls.length - 1], // use latest
+                return {
+                  ...shot,
+                  generatedVideoUrls: merged,
+                  generatedVideoUrl: merged[merged.length - 1],
+                  status:
+                    shot.status !== 'generating' ? 'completed' : shot.status,
                 };
-
-                // Only update status to completed if it hasn't started generating again
-                if (newShots[index].status !== 'generating') {
-                  newShots[index].status = 'completed';
-                }
-                return newShots;
-              });
-            }
-          };
-
-          checkFiles();
-        });
+              })
+            );
+          })
+          .catch(() => {
+            /* IndexedDB unavailable, skip */
+          });
       } catch {
         setShots(
           initialData.PODCAST_SHOTS.map((s) => ({ ...s, selected: false }))
@@ -227,6 +195,13 @@ export default function ScriptPage() {
     } else {
       setIsGlobalsExpanded(true);
     }
+
+    // Load image library from IndexedDB
+    loadAllLibraryImages()
+      .then((stored) => {
+        if (stored.length > 0) setImages(stored);
+      })
+      .catch(() => {});
 
     setIsLoaded(true);
   }, []);
@@ -272,6 +247,20 @@ export default function ScriptPage() {
     } else if (expandedShotIndex !== null && expandedShotIndex > index) {
       setExpandedShotIndex(expandedShotIndex - 1);
     }
+  };
+
+  // Add images to library + persist to IndexedDB
+  const addImagesToLibrary = (files: File[]) => {
+    const newImages = files.map((file) => ({
+      id: Math.random().toString(36).substring(7),
+      file,
+      previewUrl: URL.createObjectURL(file),
+    }));
+    setImages((prev) => [...prev, ...newImages]);
+    newImages.forEach((img) => {
+      saveImageToLibrary(img.id, img.file).catch(() => {});
+    });
+    return newImages;
   };
 
   // Update a specific shot
@@ -1148,17 +1137,7 @@ export default function ScriptPage() {
                               {shot.imageRefs.length < 3 && (
                                 <DeviceAwareUpload
                                   onUpload={(files) => {
-                                    const newImages = files.map((file) => ({
-                                      id: Math.random()
-                                        .toString(36)
-                                        .substring(7),
-                                      file,
-                                      previewUrl: URL.createObjectURL(file),
-                                    }));
-                                    setImages((prev) => [
-                                      ...prev,
-                                      ...newImages,
-                                    ]);
+                                    const newImages = addImagesToLibrary(files);
 
                                     // ensure we don't exceed 3
                                     const availableSlots =
@@ -1423,6 +1402,24 @@ export default function ScriptPage() {
 
                           const data = await res.json();
 
+                          // Save to IndexedDB so video survives page reloads / Vercel cold starts
+                          if (res.ok && data.videoUrl) {
+                            try {
+                              const videoRes = await fetch(data.videoUrl);
+                              if (videoRes.ok) {
+                                const blob = await videoRes.blob();
+                                const filename = data.videoUrl
+                                  .split('/')
+                                  .pop()!;
+                                await saveGeneratedVideo(filename, blob);
+                                // Replace server URL with local blob URL for immediate playback
+                                data.videoUrl = URL.createObjectURL(blob);
+                              }
+                            } catch {
+                              // Non-fatal — still use server URL
+                            }
+                          }
+
                           setShots((prev) => {
                             const newShots = [...prev];
                             if (res.ok && data.videoUrl) {
@@ -1539,20 +1536,13 @@ export default function ScriptPage() {
             <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
               Image Library
               <span className="text-xs font-normal text-slate-500 bg-white px-2 py-0.5 rounded-full border border-slate-200">
-                {images.length} items
+                {images.length} {images.length === 1 ? 'image' : 'images'}
               </span>
             </h2>
             <div className="flex items-center gap-3">
               <div onClick={(e) => e.stopPropagation()}>
                 <DeviceAwareUpload
-                  onUpload={(files) => {
-                    const newImages = files.map((file) => ({
-                      id: Math.random().toString(36).substring(7),
-                      file,
-                      previewUrl: URL.createObjectURL(file),
-                    }));
-                    setImages((prev) => [...prev, ...newImages]);
-                  }}
+                  onUpload={(files) => addImagesToLibrary(files)}
                   onOpenLibrary={() => setIsLibraryExpanded(true)}
                   hasLibraryImages={images.length > 0}
                 >
@@ -1574,14 +1564,7 @@ export default function ScriptPage() {
                 <div>No images uploaded yet.</div>
                 <div onClick={(e) => e.stopPropagation()}>
                   <DeviceAwareUpload
-                    onUpload={(files) => {
-                      const newImages = files.map((file) => ({
-                        id: Math.random().toString(36).substring(7),
-                        file,
-                        previewUrl: URL.createObjectURL(file),
-                      }));
-                      setImages((prev) => [...prev, ...newImages]);
-                    }}
+                    onUpload={(files) => addImagesToLibrary(files)}
                     onOpenLibrary={() => setIsLibraryExpanded(true)}
                     hasLibraryImages={images.length > 0}
                   >
@@ -1649,8 +1632,16 @@ export default function ScriptPage() {
             <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
               Generated Media
               <span className="text-xs font-normal text-slate-500 bg-white px-2 py-0.5 rounded-full border border-slate-200">
-                {shots.filter((s) => s.generatedVideoUrls?.length).length}{' '}
-                videos
+                {shots.reduce(
+                  (acc, s) => acc + (s.generatedVideoUrls?.length ?? 0),
+                  0
+                )}{' '}
+                {shots.reduce(
+                  (acc, s) => acc + (s.generatedVideoUrls?.length ?? 0),
+                  0
+                ) === 1
+                  ? 'video'
+                  : 'videos'}
               </span>
             </h2>
             <div className="text-slate-400">{isMediaExpanded ? '▼' : '▶'}</div>
@@ -1923,6 +1914,7 @@ export default function ScriptPage() {
         message="Are you sure you want to permanently delete this image from your library?"
         onConfirm={() => {
           if (imageToDelete) {
+            deleteLibraryImage(imageToDelete).catch(() => {});
             setImages((prev) => prev.filter((img) => img.id !== imageToDelete));
             // Also optionally remove from shot attachments
             setShots((prev) =>
@@ -1944,6 +1936,10 @@ export default function ScriptPage() {
         onConfirm={() => {
           if (videoToDelete !== null) {
             const { shotIndex, url } = videoToDelete;
+            // Remove from IndexedDB — extract filename from blob URL or path
+            const filename = url.split('/').pop();
+            if (filename) deleteGeneratedVideo(filename).catch(() => {});
+
             setShots((prev) => {
               const newShots = [...prev];
               const targetShot = newShots[shotIndex];

@@ -1,36 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { generateReelImageDirect } from '@/services/gemini-video';
-import path from 'path';
-import fs from 'fs';
-
-function resolveOutputPath(shotNumber: number | undefined): {
-  outputPath: string;
-  outputFilename: string;
-} {
-  let outputFilename = shotNumber
-    ? `shot_${shotNumber}.mp4`
-    : `shot_${Date.now()}.mp4`;
-  let outputPath = path.join(
-    process.cwd(),
-    'public',
-    'generated',
-    outputFilename
-  );
-  if (shotNumber) {
-    let counter = 1;
-    while (fs.existsSync(outputPath)) {
-      outputFilename = `shot_${shotNumber}_(${counter}).mp4`;
-      outputPath = path.join(
-        process.cwd(),
-        'public',
-        'generated',
-        outputFilename
-      );
-      counter++;
-    }
-  }
-  return { outputPath, outputFilename };
-}
+import { resolveOutputPath } from '@/lib/video-output';
 
 export async function POST(req: NextRequest) {
   try {
@@ -55,7 +25,7 @@ export async function POST(req: NextRequest) {
         { status: 400 }
       );
 
-    const { outputPath, outputFilename } = resolveOutputPath(shotNumber);
+    const { outputPath, videoUrl } = resolveOutputPath(shotNumber);
 
     const generatedPath = await generateReelImageDirect({
       prompt,
@@ -68,10 +38,7 @@ export async function POST(req: NextRequest) {
     });
 
     if (generatedPath) {
-      return NextResponse.json(
-        { videoUrl: `/generated/${outputFilename}` },
-        { status: 200 }
-      );
+      return NextResponse.json({ videoUrl }, { status: 200 });
     }
     return NextResponse.json(
       { error: 'Failed to generate video' },

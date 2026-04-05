@@ -280,7 +280,6 @@ ai-avatar-content/
 │       └── voice-style.ts                      # ✅ Voice style mappings
 │
 ├── public/
-│   ├── generated/                              # ✅ Veo-generated shot videos (shot_N.mp4)
 │   └── uploads/                               # ✅ Video Maker uploaded media
 │
 ├── storage/                                    # Pipeline job files (gitignored)
@@ -834,11 +833,11 @@ Generated files for async pipeline jobs are saved to `./storage/{job_id}/` (giti
 
 ### Veo Generated Videos
 
-`public/generated/` — served statically by Next.js.
+Written to `/tmp/generated/` (writable on both local dev and Vercel). Served via `GET /api/generated/[filename]` which streams from `/tmp`. After generation the client fetches the blob, stores it in IndexedDB (`script-generated-videos`), and uses a `blob:` URL for playback — videos persist across page reloads and Vercel cold starts without needing the server file. `public/generated/` no longer exists.
 
-| File         | Written By        | Notes                                      |
-| ------------ | ----------------- | ------------------------------------------ |
-| `shot_N.mp4` | `gemini-video.ts` | If file exists, appends `(1)`, `(2)`, etc. |
+| File         | Written By        | Notes                                        |
+| ------------ | ----------------- | -------------------------------------------- |
+| `shot_N.mp4` | `gemini-video.ts` | If file exists, appends `_(1)`, `_(2)`, etc. |
 
 ### Video Maker Uploads
 

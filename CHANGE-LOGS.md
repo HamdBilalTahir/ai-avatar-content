@@ -2,6 +2,35 @@
 
 ---
 
+### ✨ Features
+
+---
+
+> ### IndexedDB Persistence for Image Library & Generated Videos
+>
+> - **What changed:** Image Library uploads and generated shot videos are now persisted in IndexedDB and survive page reloads, browser restarts, and Vercel cold starts:
+>   - **Images** — every file uploaded via any upload point (`addImagesToLibrary`) is saved as a blob to the `script-image-library` IndexedDB store (`src/lib/imageLibraryDb.ts`). On page load, all stored blobs are read from IndexedDB, reconstructed as `File` objects, and `blob:` URLs are created for preview — no server involved. Deleting an image from the UI calls `deleteLibraryImage` to remove it from IndexedDB as well.
+>   - **Videos** — after a successful generation, the client fetches the video blob from `/api/generated/[filename]`, stores it in the `script-generated-videos` IndexedDB store (`src/lib/generatedVideosDb.ts`), and immediately switches to a `blob:` URL for playback. On page load, stored blobs are matched back to their shots by filename prefix and `blob:` URLs are recreated. Deleting a video from the UI calls `deleteGeneratedVideo` to remove it from IndexedDB as well.
+> - **Why:** Without IndexedDB, every page refresh wiped the image library (forcing re-upload) and generated videos were lost on Vercel cold starts since `/tmp` is ephemeral. IndexedDB acts as the permanent client-side store — the server is only needed at the moment of generation.
+> - **Files:**
+>   - `src/lib/imageLibraryDb.ts` _(new)_
+>   - `src/lib/generatedVideosDb.ts` _(new)_
+>   - `src/app/script/page.tsx`
+
+---
+
+> ### Unified Video Output Path — Always `/tmp/generated` via API Route + IndexedDB
+>
+> - **What changed:** Removed the `isVercel` environment branch from `video-output.ts`. Generated videos are now always written to `/tmp/generated/` and always served via `GET /api/generated/[filename]` — on both local dev and Vercel. `public/generated/` has been deleted. Added `GET /api/generated/[filename]` route that streams from `/tmp` with path-traversal protection. After the client receives the video URL, it immediately fetches the blob, saves it to IndexedDB (`script-generated-videos`), and switches to a `blob:` URL for playback — so the video is available offline and survives `/tmp` being wiped on cold starts.
+> - **Why:** The previous dual-path approach (`public/generated/` locally, `/tmp` on Vercel) added unnecessary complexity. A single path makes the behaviour identical in both environments. IndexedDB as the source of truth means the server file is only needed once — immediately after generation.
+> - **Files:**
+>   - `src/lib/video-output.ts`
+>   - `src/app/api/generated/[filename]/route.ts` _(new)_
+>   - `public/generated/` _(deleted)_
+>   - `Architecture.md`
+
+---
+
 ### 🐛 Fixes
 
 ---
