@@ -37,6 +37,15 @@
 
 ---
 
+> ### Copy & Clear Buttons for Bulk Edit
+>
+> - **What changed:** Added "Copy" and "Clear" buttons to the bulk edit textareas for both Globals and Shots, mirroring the functionality provided for individual shot prompts. The Copy button copies the entire bulk text to the clipboard and shows a brief success animation, while the Clear button instantly empties the textarea. Additionally, the "Save Bulk Edit" button for Globals was moved from the top header down to the bottom row alongside the "Cancel" button, perfectly aligning its layout with the Shots Bulk Edit interface.
+> - **Why:** Improves workflow efficiency when managing large scripts or variable sets, making it easier to duplicate or wipe bulk content without manual text selection on desktop and mobile. Moving the Save button creates a consistent, predictable user experience across all bulk edit modes.
+> - **Files:**
+>   - `src/app/script/page.tsx`
+
+---
+
 > ### Clear Button for Shot Prompts
 >
 > - **What changed:** Added a "Clear" button next to the Prompt label in each shot's detail view. Clicking it instantly empties the prompt textarea. Additionally, added a "Copy" button next to it that copies the current prompt text to the clipboard and shows a green tick animation for 2 seconds. Both buttons also have active click scaling and background darkening states.
