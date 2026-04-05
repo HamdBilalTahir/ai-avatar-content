@@ -6,6 +6,15 @@
 
 ---
 
+> ### Legacy ImageRefs Cleared on Load
+>
+> - **What changed:** Added logic to automatically strip out legacy `'1'` and `'2'` string values from the `imageRefs` array when loading saved shots from `localStorage`.
+> - **Why:** The app is moving toward using direct images instead of string references. Users who had the old default constants saved in their browser were seeing orphaned "Ref 1" tiles; this cleanly drops them so the UI reflects the new state.
+> - **Files:**
+>   - `src/app/script/page.tsx`
+
+---
+
 > ### Bulk Edit Accepts Empty Submissions
 >
 > - **What changed:** Saving an empty or whitespace-only bulk edit for Globals and Shots no longer triggers an error.

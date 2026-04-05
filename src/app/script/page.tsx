@@ -70,6 +70,9 @@ export default function ScriptPage() {
         const resetShots = parsed.map((s: Shot) => ({
           ...s,
           status: s.status === 'generating' ? 'idle' : s.status,
+          imageRefs: Array.isArray(s.imageRefs)
+            ? s.imageRefs.filter((ref) => ref !== '1' && ref !== '2')
+            : [],
         }));
 
         setShots(resetShots);
