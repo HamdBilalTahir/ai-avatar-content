@@ -5,8 +5,15 @@ import fs from 'fs/promises';
 
 export async function POST(req: NextRequest) {
   try {
-    const { prompt, modelName, duration, resolution, apiKey, shotNumber } =
-      await req.json();
+    const {
+      prompt,
+      modelName,
+      duration,
+      resolution,
+      apiKey,
+      shotNumber,
+      existingCount,
+    } = await req.json();
 
     if (!prompt)
       return NextResponse.json(
@@ -14,7 +21,10 @@ export async function POST(req: NextRequest) {
         { status: 400 }
       );
 
-    const { outputPath, outputFilename } = resolveOutputPath(shotNumber);
+    const { outputPath, outputFilename } = resolveOutputPath(
+      shotNumber,
+      existingCount ?? 0
+    );
 
     const generatedPath = await generateReelText({
       prompt,

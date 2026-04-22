@@ -35,6 +35,32 @@ type ImageItem = {
   previewUrl: string;
 };
 
+/** Return a base64 string for the image. If the file exceeds 4 MB, resize to ≤1024px first. */
+async function resizeImageToBase64(file: File, maxPx: number): Promise<string> {
+  const FOUR_MB = 4 * 1024 * 1024;
+  if (file.size <= FOUR_MB) {
+    const buf = await file.arrayBuffer();
+    return Buffer.from(buf).toString('base64');
+  }
+  return new Promise((resolve, reject) => {
+    const img = new window.Image();
+    img.onload = () => {
+      const scale = Math.min(1, maxPx / Math.max(img.width, img.height));
+      const w = Math.round(img.width * scale);
+      const h = Math.round(img.height * scale);
+      const canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      canvas.getContext('2d')!.drawImage(img, 0, 0, w, h);
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+      resolve(dataUrl.split(',')[1]);
+      URL.revokeObjectURL(img.src);
+    };
+    img.onerror = reject;
+    img.src = URL.createObjectURL(file);
+  });
+}
+
 export default function ScriptPage() {
   const [shots, setShots] = useState<Shot[]>([]);
   const [isLoaded, setIsLoaded] = useState(false);
@@ -118,13 +144,21 @@ export default function ScriptPage() {
     if (savedShots) {
       try {
         const parsed = JSON.parse(savedShots);
-        const resetShots = parsed.map((s: Shot) => ({
-          ...s,
-          status: s.status === 'generating' ? 'idle' : s.status,
-          imageRefs: Array.isArray(s.imageRefs)
-            ? s.imageRefs.filter((ref) => ref !== '1' && ref !== '2')
-            : [],
-        }));
+        const resetShots = parsed.map((s: Shot) => {
+          // Strip ephemeral server URLs — only blob: URLs survive a reload
+          const cleanUrls = (s.generatedVideoUrls ?? []).filter((u: string) =>
+            u.startsWith('blob:')
+          );
+          return {
+            ...s,
+            status: s.status === 'generating' ? 'idle' : s.status,
+            imageRefs: Array.isArray(s.imageRefs)
+              ? s.imageRefs.filter((ref) => ref !== '1' && ref !== '2')
+              : [],
+            generatedVideoUrls: cleanUrls,
+            generatedVideoUrl: cleanUrls[cleanUrls.length - 1] ?? undefined,
+          };
+        });
 
         setShots(resetShots);
 
@@ -1345,18 +1379,19 @@ export default function ScriptPage() {
                             );
                           });
 
-                          // Resolve imageRefs → base64
+                          // Resolve imageRefs → base64, resized to ≤1024px to stay under Vercel's 4.5 MB body limit
                           const resolvedImages = await Promise.all(
                             shot.imageRefs
                               .map((id) => images.find((img) => img.id === id))
                               .filter(Boolean)
                               .map(async (img) => {
-                                const buf = await img!.file.arrayBuffer();
-                                const base64 =
-                                  Buffer.from(buf).toString('base64');
+                                const base64 = await resizeImageToBase64(
+                                  img!.file,
+                                  1024
+                                );
                                 return {
                                   base64,
-                                  mimeType: img!.file.type || 'image/jpeg',
+                                  mimeType: 'image/jpeg',
                                 };
                               })
                           );
@@ -1375,6 +1410,7 @@ export default function ScriptPage() {
                             resolution: shot.resolution,
                             apiKey,
                             shotNumber: shot.shot_number,
+                            existingCount: shot.generatedVideoUrls?.length ?? 0,
                           };
 
                           if (resolvedImages.length === 0) {
@@ -1398,32 +1434,46 @@ export default function ScriptPage() {
                             body: JSON.stringify(body),
                           });
 
-                          // API routes return video/mp4 binary on success, JSON on error
+                          // Routes return video/mp4 binary on success, JSON on error
                           let videoUrl: string | null = null;
                           let errorMsg: string | null = null;
 
                           const contentType =
                             res.headers.get('content-type') || '';
+                          console.log(
+                            `[generate-video] response status=${res.status} content-type="${contentType}" x-video-filename="${res.headers.get('x-video-filename')}"`
+                          );
                           if (res.ok && contentType.startsWith('video/')) {
+                            console.log(`[generate-video] reading blob...`);
                             const blob = await res.blob();
-
-                            // Let the frontend manage multiple iterations so they don't overwrite each other in IndexedDB
-                            const existingCount =
-                              shots[i].generatedVideoUrls?.length || 0;
-                            let filename = `shot_${shots[i].shot_number}.mp4`;
-                            if (existingCount > 0) {
-                              filename = `shot_${shots[i].shot_number}_(${existingCount}).mp4`;
-                            }
-
+                            console.log(
+                              `[generate-video] blob size=${blob.size} type=${blob.type}`
+                            );
+                            const filename =
+                              res.headers.get('x-video-filename') ||
+                              `shot_${shot.shot_number}.mp4`;
                             try {
                               await saveGeneratedVideo(filename, blob);
-                            } catch {
-                              // IndexedDB failure is non-fatal
+                              console.log(
+                                `[generate-video] saved to IndexedDB as ${filename}`
+                              );
+                            } catch (e) {
+                              console.warn(
+                                `[generate-video] IndexedDB save failed:`,
+                                e
+                              );
                             }
                             videoUrl = URL.createObjectURL(blob);
+                            console.log(
+                              `[generate-video] blob URL created: ${videoUrl}`
+                            );
                           } else {
                             const data = await res.json();
                             errorMsg = data.error || 'Video generation failed.';
+                            console.warn(
+                              `[generate-video] error response:`,
+                              data
+                            );
                           }
 
                           setShots((prev) => {

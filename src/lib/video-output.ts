@@ -2,15 +2,20 @@ import path from 'path';
 
 const TMP_DIR = '/tmp/generated';
 
-export function resolveOutputPath(shotNumber: number | undefined): {
+export function resolveOutputPath(
+  shotNumber: number | undefined,
+  existingCount: number = 0
+): {
   outputPath: string;
   outputFilename: string;
   videoUrl: string;
 } {
-  const timestamp = Date.now();
+  const version = existingCount + 1;
   const outputFilename = shotNumber
-    ? `shot_${shotNumber}_${timestamp}.mp4`
-    : `shot_${timestamp}.mp4`;
+    ? version === 1
+      ? `shot_${shotNumber}.mp4`
+      : `shot_${shotNumber}_(v${version}).mp4`
+    : `shot_unknown_(v${version}).mp4`;
 
   const outputPath = path.join(TMP_DIR, outputFilename);
 

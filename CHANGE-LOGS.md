@@ -1,4 +1,153 @@
+## 🗓️ **2026-04-10**
+
+---
+
+### ✨ Features
+
+---
+
+> ### Avatar Image Generation — SSE Streaming to Prevent Vercel Timeout
+>
+> - **What changed:** `POST /api/avatar/generate` now returns a Server-Sent Events (SSE) stream instead of a plain JSON response. The server sends a `ping` event every 5 seconds to keep the connection alive during long generations, then sends a final `result` event (with `image_base64` and `mime_type`) or `error` event on completion. The client reads the stream, ignores pings, and updates the UI when the result arrives.
+> - **Why:** Gemini image generation can take 40–90s. Vercel's default function timeout is 60s, causing silent failures on longer requests. SSE keeps the connection open past that limit.
+> - **Files:**
+>   - `src/app/api/avatar/generate/route.ts`
+>   - `src/app/avatar/new/page.tsx`
+
+---
+
+> ### Avatar Image Service — Elapsed Time Logging & Timeout
+>
+> - **What changed:** `generateAvatarImage` in `src/services/gemini-image.ts` now logs elapsed time every 5s while waiting for Gemini (`⏳ still waiting... Xs elapsed`) and logs total time on completion. The interval is always cleared in a `finally` block so it stops regardless of success, error, or timeout. A 2-minute hard timeout via `Promise.race` ensures hung requests are rejected cleanly rather than polling forever.
+> - **Why:** Without `finally`, a successful generation on a prior request left the interval running indefinitely (seen logging up to 1100s). Without a timeout, hung Gemini calls would never resolve.
+> - **Files:**
+>   - `src/services/gemini-image.ts`
+
+---
+
+### 🐛 Fixes
+
+---
+
+> ### Avatar Image Generation — Removed Hardcoded Portrait/Lipsync Constraints
+>
+> - **What changed:** Removed the `LIPSYNC_SUFFIX` constant and its usage from `generateAvatarImage`. Prompts are now passed through as-is. When reference images are provided, the instruction simply says "generate an image that matches this description" rather than forcing face/portrait/lipsync-specific constraints.
+> - **Why:** The generator was locked to producing front-facing portrait images, preventing any other kind of image (scenes, objects, backgrounds, etc.) from being generated.
+> - **Files:**
+>   - `src/services/gemini-image.ts`
+
+---
+
+---
+
+### 🐛 Fixes
+
+---
+
+> ### Video Naming — Version-Based on Both Local and Vercel
+>
+> - **What changed:** `video-output.ts` now always uses human-readable version-based filenames (`shot_1.mp4`, `shot_1_(v2).mp4`, `shot_1_(v3).mp4`) regardless of environment. The timestamp-based naming (`shot_1_1775806098332.mp4`) has been removed. The client now sends `existingCount` in the request body so the server knows which version to name the file. All three routes (`text`, `image-direct`, `image-refs`) accept and forward `existingCount` to `resolveOutputPath`.
+> - **Why:** Timestamp naming was added to avoid `/tmp` collisions on Vercel, but each Vercel serverless invocation has its own isolated `/tmp` filesystem — collisions are impossible. Version-based names are consistent and readable everywhere.
+> - **Files:**
+>   - `src/lib/video-output.ts`
+>   - `src/app/api/script/generate-video/text/route.ts`
+>   - `src/app/api/script/generate-video/image-direct/route.ts`
+>   - `src/app/api/script/generate-video/image-refs/route.ts`
+>   - `src/app/script/page.tsx`
+
+---
+
+> ### Video Client — Binary Response Handling
+>
+> - **What changed:** The client now correctly handles the `video/mp4` binary response from the generation APIs. It checks `content-type` header, reads the response as a blob directly (no second GET request), saves to IndexedDB using the `x-video-filename` header, and creates a `blob:` URL. Error responses (JSON) are handled separately.
+> - **Why:** The client was calling `res.json()` on a binary response, silently failing, and showing an error despite the server returning 200 with a valid video.
+> - **Files:**
+>   - `src/app/script/page.tsx`
+
+---
+
+> ### Stale Server Video URLs Stripped on Page Load
+>
+> - **What changed:** On page load, any `generatedVideoUrls` stored in localStorage that are not `blob:` URLs (e.g. old `/api/generated/...` paths) are stripped before setting shot state. IndexedDB then restores valid blob URLs for matching shots.
+> - **Why:** Old server-path URLs caused 404 requests on reload since `/tmp` is ephemeral and filenames changed between sessions.
+> - **Files:**
+>   - `src/app/script/page.tsx`
+
+---
+
+> ### Avatar Image Compression Always On — `config.ts` Removed
+>
+> - **What changed:** Reference image compression (>4 MB → compress to fit) now always runs in `POST /api/avatar/generate`, regardless of environment. The `IS_PRODUCTION` env gate and `src/lib/config.ts` have been removed.
+> - **Why:** The 4.5 MB Vercel request body limit applies everywhere — there's no reason to only compress in one environment.
+> - **Files:**
+>   - `src/app/api/avatar/generate/route.ts`
+>   - `src/lib/config.ts` _(deleted)_
+
+---
+
+## 🗓️ **2026-04-09**
+
+---
+
+### ✨ Features
+
+---
+
+> ### Central App Config (`src/lib/config.ts`)
+>
+> - **What changed:** Added `src/lib/config.ts` as a central config file. Currently exposes `config.isProduction` (boolean), driven by the `IS_PRODUCTION` env variable — set to `Yes` to enable, `No` (or absent) to disable.
+> - **Why:** Provides a single place to gate environment-specific behaviour without scattering `process.env` checks across the codebase.
+> - **Files:**
+>   - `src/lib/config.ts` _(new)_
+
+---
+
+### 🐛 Fixes
+
+---
+
+> ### Avatar Reference Image Compression (>4 MB) — Server-Side via Sharp
+>
+> - **What changed:** The avatar generate API (`POST /api/avatar/generate`) now compresses reference images that exceed 4 MB before passing them to Gemini. Compression preserves the original pixel dimensions — only JPEG quality is reduced, using a binary search to find the highest quality that still fits under 4 MB. The original and compressed sizes are logged. Only runs when `IS_PRODUCTION=Yes` in the env config.
+> - **Why:** Large phone photos (e.g. 7–10 MB) were being passed to the Gemini image API at full size, causing slow requests. Compression brings them under 4 MB with minimal visible quality loss.
+> - **Files:**
+>   - `src/app/api/avatar/generate/route.ts`
+>   - `src/lib/config.ts`
+>   - `package.json` (`sharp` added)
+
+---
+
+> ### Avatar Generate API — Request Logging
+>
+> - **What changed:** Added structured `console.log` / `console.warn` calls throughout `POST /api/avatar/generate` covering: entry (prompt preview, ref count, key presence), validation pass/fail, reference image sizes in MB, compression before/after, Gemini call start, and success/error outcomes.
+> - **Why:** The API was taking 40+ seconds with no visibility into where time was being spent or whether validation was passing.
+> - **Files:**
+>   - `src/app/api/avatar/generate/route.ts`
+
+---
+
 ## 🗓️ **2026-04-06**
+
+---
+
+### 🐛 Fixes
+
+---
+
+> ### Image Resize Before Video Generation API Call (>4 MB Only)
+>
+> - **What changed:** Images attached to shots are now resized client-side before being base64-encoded and sent to the video generation APIs. If a file is ≤ 4 MB it is sent as-is at full quality. If it exceeds 4 MB, it is drawn onto a canvas scaled so the longest side is ≤ 1024 px and re-exported as JPEG at 85% quality before encoding. The resize is handled by the new `resizeImageToBase64` helper in `src/app/script/page.tsx` and applies to all three routes (text, image-direct, image-refs) since the encoding happens in the shared `resolvedImages` mapping before the route is chosen.
+> - **Why:** Large phone photos (4–10 MB+) were causing Vercel's 4.5 MB request body limit to be exceeded, returning a 413 payload-too-large error on image-to-video generation.
+> - **Files:**
+>   - `src/app/script/page.tsx`
+
+---
+
+> ### Push to Library Button — Style Consistency Fix (Avatar Page)
+>
+> - **What changed:** The "Push to Library" button on the avatar page now matches the same outlined style as the Regenerate and Download buttons (`border-violet-200 bg-white text-violet-700`). Previously it had a heavy dark `border-violet-600 bg-violet-600` fill that made it look selected or out of place.
+> - **Files:**
+>   - `src/app/avatar/new/page.tsx`
 
 ---
 

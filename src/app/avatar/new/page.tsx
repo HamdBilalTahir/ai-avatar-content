@@ -4,11 +4,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import DeviceAwareUpload from '@/components/DeviceAwareUpload';
 import NextImage from 'next/image';
-import type {
-  AvatarGenerateResponse,
-  PipelineCreateRequest,
-  ReferenceImage,
-} from '@/lib/types';
+import type { PipelineCreateRequest, ReferenceImage } from '@/lib/types';
 
 const VOICE_PRESETS = [
   {
@@ -338,17 +334,43 @@ export default function AvatarNewPage() {
             : {}),
         }),
       });
-      const data = (await res.json()) as AvatarGenerateResponse & {
-        error?: string;
-      };
 
-      if (!res.ok) {
+      if (!res.ok || !res.body) {
+        const data = await res.json();
         throw new Error(data.error ?? 'Avatar generation failed');
       }
 
-      setImageBase64(data.image_base64);
-      setMimeType(data.mime_type);
-      setGenerationCount((c) => c + 1);
+      // Read SSE stream — pings keep connection alive, result/error are final events
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        const events = buffer.split('\n\n');
+        buffer = events.pop() ?? '';
+
+        for (const block of events) {
+          const eventMatch = block.match(/^event: (\w+)/m);
+          const dataMatch = block.match(/^data: (.+)$/m);
+          if (!eventMatch || !dataMatch) continue;
+
+          const event = eventMatch[1];
+          const payload = JSON.parse(dataMatch[1]);
+
+          if (event === 'result') {
+            setImageBase64(payload.image_base64);
+            setMimeType(payload.mime_type);
+            setGenerationCount((c) => c + 1);
+          } else if (event === 'error') {
+            throw new Error(payload.error ?? 'Avatar generation failed');
+          }
+          // 'ping' events are ignored — they just keep the connection alive
+        }
+      }
     } catch (err) {
       setAvatarError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -1387,7 +1409,7 @@ export default function AvatarNewPage() {
                   </button>
                   <button
                     onClick={handlePushToLibrary}
-                    className="flex flex-1 items-center justify-center gap-1.5 rounded-xl border-2 border-violet-600 bg-violet-50 text-violet-700 py-2.5 text-sm font-semibold transition hover:bg-violet-100 active:scale-[0.98] min-w-[120px]"
+                    className="flex flex-1 items-center justify-center gap-1.5 rounded-xl border-2 border-violet-200 bg-white py-2.5 text-sm font-semibold text-violet-700 transition hover:border-violet-300 hover:bg-violet-50 active:scale-[0.98] min-w-[120px]"
                   >
                     <svg
                       xmlns="http://www.w3.org/2000/svg"

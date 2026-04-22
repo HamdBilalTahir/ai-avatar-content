@@ -12,6 +12,7 @@ export async function POST(req: NextRequest) {
       resolution,
       apiKey,
       shotNumber,
+      existingCount,
       image,
     } = await req.json();
 
@@ -26,7 +27,10 @@ export async function POST(req: NextRequest) {
         { status: 400 }
       );
 
-    const { outputPath, outputFilename } = resolveOutputPath(shotNumber);
+    const { outputPath, outputFilename } = resolveOutputPath(
+      shotNumber,
+      existingCount ?? 0
+    );
 
     const generatedPath = await generateReelImageDirect({
       prompt,
