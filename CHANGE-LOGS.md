@@ -6,6 +6,15 @@
 
 ---
 
+> ### Migrate storage to Firestore and normalize schema
+>
+> - **What changed:** Migrated imageLibraries and generatedVideos to Firestore, making imageLibraries a user-specific document with an images subcollection, and normalizing generatedVideos to reference shotId. Included robust createdAt and updatedAt timestamp handling for all script related collections.
+> - **Why:** To decouple large binary/media data from core script documents, improve query performance, and ensure persistent, scalable data storage across devices.
+> - **Files:**
+>   - `src/app/script/page.tsx`
+
+---
+
 > ### Vercel Blob Integration & Firestore Schema Migration
 >
 > - **What changed:** Replaced IndexedDB and `localStorage` media with centralized Vercel Blob storage. Added `POST /api/upload` to handle chunked/streamed uploads to `@vercel/blob`. Executed a one-time migration to move all existing `script_threads`, shots, global variables, and generated video links into the formalised Firestore schema (`scripts`, `scripts/{id}/shots`, `scripts/{id}/globals`, `generatedVideos`, `imageLibraries`). The script fetched local blobs via IndexedDB URLs, uploaded them to Vercel Blob (under `generated-videos/`), and saved the persistent URLs to Firestore with proper relational keys.

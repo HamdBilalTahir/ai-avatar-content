@@ -6,19 +6,24 @@ import * as initialData from './constants';
 import DeviceAwareUpload from '@/components/DeviceAwareUpload';
 import { ConfirmPopup } from '@/components/ConfirmPopup';
 import PromptEditor from '@/components/PromptEditor';
+import { useAuth } from '@/lib/AuthContext';
+import { db } from '@/lib/firebase';
 import {
-  saveGeneratedVideo,
-  loadGeneratedVideosByThread,
-  deleteGeneratedVideo,
-  migrateVideosToThread,
-} from '@/lib/generatedVideosDb';
-import {
-  saveImageToLibrary,
-  loadAllLibraryImages,
-  deleteLibraryImage,
-} from '@/lib/imageLibraryDb';
+  collection,
+  doc,
+  setDoc,
+  getDoc,
+  getDocs,
+  updateDoc,
+  query,
+  where,
+  orderBy,
+  writeBatch,
+  serverTimestamp,
+} from 'firebase/firestore';
 
 type Shot = {
+  id?: string;
   shot_number: number;
   duration: number | string;
   resolution: string;
@@ -27,13 +32,19 @@ type Shot = {
   prompt: string;
   selected?: boolean;
   status?: 'idle' | 'generating' | 'completed' | 'error';
-  generatedVideoUrl?: string; // keeping for backwards compatibility
-  generatedVideoUrls?: string[];
+};
+
+type GeneratedVideo = {
+  id: string;
+  blobUrl: string;
+  shotId: string;
+  shotNumber: number;
+  createdAt: number;
 };
 
 type ImageItem = {
   id: string;
-  file: File;
+  file?: File;
   previewUrl: string;
   blobUrl?: string;
 };
@@ -43,40 +54,6 @@ type ScriptThread = {
   name: string;
   createdAt: number;
 };
-
-function tryParseShots(raw: string): Shot[] {
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return [];
-  }
-}
-
-function inferThreadName(shots: Shot[]): string {
-  if (!shots.length) return 'Script 1';
-  // Walk all shot prompts and collect the first descriptive line
-  // (skip style/technical boilerplate lines)
-  const skip =
-    /^(style:|camera:|human movement:|no |single |only |aspect|resolution|duration)/i;
-  for (const shot of shots.slice(0, 3)) {
-    const lines = (shot.prompt || '')
-      .split('\n')
-      .map((l) => l.trim())
-      .filter(Boolean);
-    for (const line of lines) {
-      if (!skip.test(line) && line.length > 8) {
-        // Take up to 5 words, strip trailing punctuation
-        const name = line
-          .split(/\s+/)
-          .slice(0, 5)
-          .join(' ')
-          .replace(/[.,;:!?]+$/, '');
-        if (name.length > 4) return name;
-      }
-    }
-  }
-  return `${shots.length}-Shot Script`;
-}
 
 /** Return a base64 string for the image. If the file exceeds 4 MB, resize to ≤1024px first. */
 async function resizeImageToBase64(file: File, maxPx: number): Promise<string> {
@@ -105,11 +82,13 @@ async function resizeImageToBase64(file: File, maxPx: number): Promise<string> {
 }
 
 export default function ScriptPage() {
+  const { user } = useAuth();
   const [threads, setThreads] = useState<ScriptThread[]>([]);
   const [activeThreadId, setActiveThreadId] = useState('');
   const [editingThreadId, setEditingThreadId] = useState<string | null>(null);
   const [editingThreadName, setEditingThreadName] = useState('');
   const [shots, setShots] = useState<Shot[]>([]);
+  const [generatedVideos, setGeneratedVideos] = useState<GeneratedVideo[]>([]);
   const [isLoaded, setIsLoaded] = useState(false);
   const [expandedShotIndex, setExpandedShotIndex] = useState<number | null>(0);
   const [images, setImages] = useState<ImageItem[]>([]);
@@ -174,6 +153,7 @@ export default function ScriptPage() {
   };
 
   const generatedMediaRef = useRef<HTMLDivElement>(null);
+  const lastSavedRef = useRef<string>('');
 
   React.useEffect(() => {
     if (recentSuccessUrls.length > 0 && window.innerWidth < 1024) {
@@ -186,210 +166,34 @@ export default function ScriptPage() {
     }
   }, [recentSuccessUrls]);
 
-  // Restore shots + videos for a given thread id (used on mount and on switch)
-  const restoreThreadShots = (threadId: string, rawShots: Shot[]) => {
-    // Always clear video URLs — blob: URLs expire on page unload. IndexedDB repopulates fresh ones.
-    const resetShots = rawShots.map(
-      (s: Shot) =>
-        ({
-          ...s,
-          status:
-            s.status === 'generating' ? 'idle' : (s.status as Shot['status']),
-          imageRefs: Array.isArray(s.imageRefs)
-            ? s.imageRefs.filter((ref) => ref !== '1' && ref !== '2')
-            : [],
-          generatedVideoUrls: [],
-          generatedVideoUrl: undefined,
-        }) as Shot
-    );
-    setShots(resetShots);
-
-    loadGeneratedVideosByThread(threadId)
-      .then((stored) => {
-        console.log(
-          `[restore] ${threadId}: ${stored.length} videos in IndexedDB`,
-          stored.map((v) => v.id)
-        );
-        if (stored.length === 0) return;
-        const blobMap = new Map(stored.map((v) => [v.id, v.blobUrl]));
-        setShots((prev) =>
-          prev.map((shot) => {
-            const matchingUrls = [...blobMap.entries()]
-              .filter(
-                ([id]) =>
-                  id.startsWith(`shot_${shot.shot_number}.`) ||
-                  id.startsWith(`shot_${shot.shot_number}_`)
-              )
-              .map(([, url]) => url);
-            if (matchingUrls.length === 0) return shot;
-            return {
-              ...shot,
-              generatedVideoUrls: matchingUrls,
-              generatedVideoUrl: matchingUrls[matchingUrls.length - 1],
-              status: 'completed',
-            } as Shot;
-          })
-        );
-      })
-      .catch((e) => {
-        console.warn('[restore] loadGeneratedVideosByThread failed:', e);
-      });
-  };
-
-  React.useEffect(() => {
-    // --- Load or create threads ---
-    let loadedThreads: ScriptThread[] = [];
+  const loadThreadData = async (threadId: string) => {
     try {
-      const raw = localStorage.getItem('script_threads');
-      if (raw) loadedThreads = JSON.parse(raw);
-    } catch {
-      /* malformed — start fresh */
-    }
-
-    if (loadedThreads.length === 0) {
-      // First run — migrate old localStorage keys into a default thread
-      const firstId = `t_${Date.now()}`;
-      const oldShots = localStorage.getItem('podcast_shots');
-      const oldGlobals = localStorage.getItem('podcast_globals');
-      if (oldShots) localStorage.setItem(`thread_${firstId}_shots`, oldShots);
-      if (oldGlobals)
-        localStorage.setItem(`thread_${firstId}_globals`, oldGlobals);
-      const inferredName = inferThreadName(
-        oldShots ? tryParseShots(oldShots) : []
-      );
-      loadedThreads = [
-        { id: firstId, name: inferredName, createdAt: Date.now() },
-      ];
-      localStorage.setItem('script_threads', JSON.stringify(loadedThreads));
-    }
-
-    setThreads(loadedThreads);
-
-    // --- Determine active thread ---
-    const savedActiveId = localStorage.getItem('active_thread_id');
-    const activeId =
-      loadedThreads.find((t) => t.id === savedActiveId)?.id ??
-      loadedThreads[loadedThreads.length - 1].id;
-    setActiveThreadId(activeId);
-    localStorage.setItem('active_thread_id', activeId);
-
-    // --- Load active thread's globals ---
-    const savedGlobals = localStorage.getItem(`thread_${activeId}_globals`);
-    if (savedGlobals) {
-      try {
-        const parsedGlobals = JSON.parse(savedGlobals);
-        setGlobals(parsedGlobals);
-        setIsGlobalsExpanded(parsedGlobals.length === 0);
-      } catch {
-        setIsGlobalsExpanded(true);
+      const scriptSnap = await getDoc(doc(db, 'scripts', threadId));
+      if (scriptSnap.exists()) {
+        const data = scriptSnap.data();
+        if (data.apiKey) setApiKey(data.apiKey);
+        if (data.model) setModel(data.model);
       }
-    } else {
-      setIsGlobalsExpanded(true);
-    }
 
-    // --- Shared: API key, model, image library ---
-    const savedApiKey = localStorage.getItem('veo_api_key');
-    if (savedApiKey) setApiKey(savedApiKey);
-    const savedModel = localStorage.getItem('veo_model');
-    if (savedModel) setModel(savedModel);
-
-    loadAllLibraryImages()
-      .then((stored) => {
-        if (stored.length > 0) setImages(stored);
-      })
-      .catch(() => {});
-
-    // Migrate any bare-key IndexedDB videos to this thread, then load shots.
-    // Chained so loadGeneratedVideosByThread always runs after migration's write transaction.
-    const loadShotsAndMarkLoaded = () => {
-      const savedShots = localStorage.getItem(`thread_${activeId}_shots`);
-      if (savedShots) {
-        try {
-          restoreThreadShots(activeId, JSON.parse(savedShots));
-        } catch {
-          setShots([
-            {
-              shot_number: 1,
-              duration: initialData.PODCAST_SHOTS[0]?.duration || 8,
-              resolution: '720p',
-              aspectRatio: '16:9',
-              imageRefs: [],
-              prompt: '',
-              selected: false,
-            },
-          ]);
-        }
-      } else {
-        setShots([
-          {
-            shot_number: 1,
-            duration: initialData.PODCAST_SHOTS[0]?.duration || 8,
-            resolution: '720p',
-            aspectRatio: '16:9',
-            imageRefs: [],
-            prompt: '',
-            selected: false,
-          },
-        ]);
-      }
-      setIsLoaded(true);
-    };
-
-    migrateVideosToThread(activeId)
-      .then(loadShotsAndMarkLoaded)
-      .catch(loadShotsAndMarkLoaded);
-  }, []);
-
-  React.useEffect(() => {
-    if (isLoaded && activeThreadId) {
-      localStorage.setItem(
-        `thread_${activeThreadId}_shots`,
-        JSON.stringify(shots)
+      const globalsSnap = await getDocs(
+        collection(db, 'scripts', threadId, 'globals')
       );
-      localStorage.setItem(
-        `thread_${activeThreadId}_globals`,
-        JSON.stringify(globals)
+      const loadedGlobals = globalsSnap.docs.map((d) => ({
+        name: d.data().name,
+        value: d.data().value,
+      }));
+      setGlobals(loadedGlobals);
+      setIsGlobalsExpanded(loadedGlobals.length === 0);
+
+      const shotsSnap = await getDocs(
+        query(
+          collection(db, 'scripts', threadId, 'shots'),
+          orderBy('shotNumber', 'asc')
+        )
       );
-      localStorage.setItem('veo_api_key', apiKey);
-      localStorage.setItem('veo_model', model);
-    }
-  }, [shots, globals, apiKey, model, isLoaded, activeThreadId]);
-
-  const switchThread = (id: string) => {
-    if (id === activeThreadId) return;
-    // Eagerly persist current thread before switching
-    localStorage.setItem(
-      `thread_${activeThreadId}_shots`,
-      JSON.stringify(shots)
-    );
-    localStorage.setItem(
-      `thread_${activeThreadId}_globals`,
-      JSON.stringify(globals)
-    );
-
-    setActiveThreadId(id);
-    localStorage.setItem('active_thread_id', id);
-
-    const savedShots = localStorage.getItem(`thread_${id}_shots`);
-    if (savedShots) {
-      try {
-        restoreThreadShots(id, JSON.parse(savedShots));
-      } catch {
-        setShots([
-          {
-            shot_number: 1,
-            duration: initialData.PODCAST_SHOTS[0]?.duration || 8,
-            resolution: '720p',
-            aspectRatio: '16:9',
-            imageRefs: [],
-            prompt: '',
-            selected: false,
-          },
-        ]);
-      }
-    } else {
-      setShots([
-        {
+      if (shotsSnap.empty) {
+        const initialShot: Shot = {
+          id: `shot_${Date.now()}`,
           shot_number: 1,
           duration: initialData.PODCAST_SHOTS[0]?.duration || 8,
           resolution: '720p',
@@ -397,45 +201,313 @@ export default function ScriptPage() {
           imageRefs: [],
           prompt: '',
           selected: false,
-        },
-      ]);
-    }
+        };
+        setShots([initialShot]);
+      } else {
+        const loadedShots = shotsSnap.docs.map((d) => {
+          const data = d.data();
+          return {
+            id: d.id,
+            shot_number: data.shotNumber,
+            duration: data.duration,
+            resolution: data.resolution || '720p',
+            aspectRatio: data.aspectRatio || '16:9',
+            imageRefs: data.imageRefs || [],
+            prompt: data.prompt || '',
+            status: data.status || 'idle',
+            selected: false,
+          } as Shot;
+        });
+        setShots(loadedShots);
+      }
 
-    const savedGlobals = localStorage.getItem(`thread_${id}_globals`);
-    try {
-      const g = savedGlobals ? JSON.parse(savedGlobals) : [];
-      setGlobals(g);
-      setIsGlobalsExpanded(g.length === 0);
-    } catch {
-      setGlobals([]);
-      setIsGlobalsExpanded(true);
+      try {
+        const videosSnap = await getDocs(
+          query(
+            collection(db, 'generatedVideos'),
+            where('scriptId', '==', threadId)
+          )
+        );
+        const loadedVideos = videosSnap.docs
+          .map((d) => ({
+            id: d.id,
+            blobUrl: d.data().blobUrl,
+            shotId: d.data().shotId,
+            shotNumber: d.data().shotNumber,
+            createdAt: d.data().createdAt?.toMillis?.() || Date.now(),
+          }))
+          .sort((a, b) => a.createdAt - b.createdAt);
+        setGeneratedVideos(loadedVideos);
+      } catch (e) {
+        console.warn('[restore] loadGeneratedVideos from Firestore failed:', e);
+      }
+    } catch (e) {
+      console.error(e);
     }
   };
 
-  const createThread = () => {
+  React.useEffect(() => {
+    if (!user) return;
+
+    const loadData = async () => {
+      try {
+        const scriptsSnap = await getDocs(
+          query(
+            collection(db, 'scripts'),
+            where('userId', '==', user.uid),
+            orderBy('createdAt', 'desc')
+          )
+        );
+
+        let loadedThreads: ScriptThread[] = [];
+
+        if (scriptsSnap.empty) {
+          const firstId = `t_${Date.now()}`;
+          const inferredName = 'Script 1';
+          loadedThreads = [
+            { id: firstId, name: inferredName, createdAt: Date.now() },
+          ];
+
+          await setDoc(doc(db, 'scripts', firstId), {
+            scriptId: firstId,
+            userId: user.uid,
+            name: inferredName,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          });
+        } else {
+          loadedThreads = scriptsSnap.docs.map((d) => ({
+            id: d.id,
+            name: d.data().name || 'Script',
+            createdAt: d.data().createdAt?.toMillis?.() || Date.now(),
+          }));
+        }
+
+        setThreads(loadedThreads);
+
+        const savedActiveId = localStorage.getItem('active_thread_id');
+        const activeId =
+          loadedThreads.find((t) => t.id === savedActiveId)?.id ??
+          loadedThreads[0].id;
+
+        setActiveThreadId(activeId);
+        localStorage.setItem('active_thread_id', activeId);
+
+        const imagesSnap = await getDocs(
+          collection(db, 'imageLibraries', user.uid, 'images')
+        );
+        const loadedImages = imagesSnap.docs
+          .map((d) => ({
+            id: d.id,
+            previewUrl: d.data().blobUrl,
+            blobUrl: d.data().blobUrl,
+            createdAt: d.data().createdAt?.toMillis?.() || Date.now(),
+          }))
+          .sort((a, b) => b.createdAt - a.createdAt);
+        setImages(loadedImages);
+
+        await loadThreadData(activeId);
+
+        // Setup baseline for sync
+        lastSavedRef.current = JSON.stringify({
+          shots,
+          globals,
+          apiKey,
+          model,
+        });
+        setIsLoaded(true);
+      } catch (error) {
+        console.error('Error loading scripts:', error);
+        setIsLoaded(true);
+      }
+    };
+
+    loadData();
+  }, [user]);
+
+  const syncToFirestoreNow = async (
+    threadId: string,
+    currentShots: Shot[],
+    currentGlobals: { name: string; value: string }[],
+    currentApiKey: string,
+    currentModel: string
+  ) => {
+    if (!user || !isLoaded) return;
+    try {
+      const batch = writeBatch(db);
+      const scriptRef = doc(db, 'scripts', threadId);
+
+      batch.set(
+        scriptRef,
+        {
+          model: currentModel,
+          apiKey: currentApiKey,
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
+
+      const shotsSnap = await getDocs(
+        collection(db, 'scripts', threadId, 'shots')
+      );
+      const existingShotIds = new Set(shotsSnap.docs.map((d) => d.id));
+
+      currentShots.forEach((shot) => {
+        if (!shot.id) return;
+        const shotRef = doc(db, 'scripts', threadId, 'shots', shot.id);
+        const shotData: any = {
+          shotId: shot.id,
+          scriptId: threadId,
+          shotNumber: shot.shot_number,
+          duration: shot.duration,
+          resolution: shot.resolution || '720p',
+          aspectRatio: shot.aspectRatio || '16:9',
+          prompt: shot.prompt,
+          imageRefs: shot.imageRefs,
+          status: shot.status || 'idle',
+          updatedAt: serverTimestamp(),
+        };
+
+        if (existingShotIds.has(shot.id)) {
+          // existing shot, just merge
+          batch.set(shotRef, shotData, { merge: true });
+        } else {
+          // new shot, add createdAt
+          shotData.createdAt = serverTimestamp();
+          batch.set(shotRef, shotData, { merge: true });
+        }
+
+        existingShotIds.delete(shot.id);
+      });
+
+      existingShotIds.forEach((id) => {
+        batch.delete(doc(db, 'scripts', threadId, 'shots', id));
+      });
+
+      const globalsSnap = await getDocs(
+        collection(db, 'scripts', threadId, 'globals')
+      );
+      const existingGlobalIds = new Set(globalsSnap.docs.map((d) => d.id));
+
+      currentGlobals.forEach((g) => {
+        if (!g.name.trim()) return;
+        const globalId = g.name.trim().replace(/\//g, '_');
+        const globalRef = doc(db, 'scripts', threadId, 'globals', globalId);
+
+        const globalData: any = {
+          globalId,
+          scriptId: threadId,
+          name: g.name,
+          value: g.value,
+          updatedAt: serverTimestamp(),
+        };
+
+        if (existingGlobalIds.has(globalId)) {
+          batch.set(globalRef, globalData, { merge: true });
+        } else {
+          globalData.createdAt = serverTimestamp();
+          batch.set(globalRef, globalData, { merge: true });
+        }
+
+        existingGlobalIds.delete(globalId);
+      });
+
+      existingGlobalIds.forEach((id) => {
+        batch.delete(doc(db, 'scripts', threadId, 'globals', id));
+      });
+
+      await batch.commit();
+      lastSavedRef.current = JSON.stringify({
+        shots: currentShots,
+        globals: currentGlobals,
+        apiKey: currentApiKey,
+        model: currentModel,
+      });
+    } catch (e) {
+      console.error('Sync failed', e);
+    }
+  };
+
+  React.useEffect(() => {
+    if (!isLoaded || !activeThreadId || !user) return;
+
+    const currentDataStr = JSON.stringify({ shots, globals, apiKey, model });
+    if (lastSavedRef.current === currentDataStr) return;
+
+    const timeoutId = setTimeout(() => {
+      syncToFirestoreNow(activeThreadId, shots, globals, apiKey, model);
+    }, 1500);
+
+    return () => clearTimeout(timeoutId);
+  }, [shots, globals, apiKey, model, isLoaded, activeThreadId, user]);
+
+  const switchThread = async (id: string) => {
+    if (id === activeThreadId) return;
+
+    await syncToFirestoreNow(activeThreadId, shots, globals, apiKey, model);
+
+    setActiveThreadId(id);
+    localStorage.setItem('active_thread_id', id);
+
+    setIsLoaded(false);
+    await loadThreadData(id);
+    setIsLoaded(true);
+  };
+
+  const createThread = async () => {
+    if (!user) return;
     const id = `t_${Date.now()}`;
     const name = `Script ${threads.length + 1}`;
     const newThread: ScriptThread = { id, name, createdAt: Date.now() };
     const updated = [newThread, ...threads];
     setThreads(updated);
-    localStorage.setItem('script_threads', JSON.stringify(updated));
+
+    try {
+      await setDoc(doc(db, 'scripts', id), {
+        scriptId: id,
+        userId: user.uid,
+        name,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    } catch (e) {
+      console.error(e);
+    }
     switchThread(id);
   };
 
-  const deleteThread = (id: string) => {
+  const deleteThread = async (id: string) => {
     if (threads.length === 1) return;
     const updated = threads.filter((t) => t.id !== id);
     setThreads(updated);
-    localStorage.setItem('script_threads', JSON.stringify(updated));
-    localStorage.removeItem(`thread_${id}_shots`);
-    localStorage.removeItem(`thread_${id}_globals`);
-    if (id === activeThreadId) switchThread(updated[updated.length - 1].id);
+    if (id === activeThreadId) switchThread(updated[0].id);
+
+    try {
+      const batch = writeBatch(db);
+      batch.delete(doc(db, 'scripts', id));
+      const shotsSnap = await getDocs(collection(db, 'scripts', id, 'shots'));
+      shotsSnap.forEach((d) => batch.delete(d.ref));
+      const globalsSnap = await getDocs(
+        collection(db, 'scripts', id, 'globals')
+      );
+      globalsSnap.forEach((d) => batch.delete(d.ref));
+      await batch.commit();
+    } catch (e) {
+      console.error('Failed to delete script from Firestore', e);
+    }
   };
 
-  const renameThread = (id: string, name: string) => {
+  const renameThread = async (id: string, name: string) => {
     const updated = threads.map((t) => (t.id === id ? { ...t, name } : t));
     setThreads(updated);
-    localStorage.setItem('script_threads', JSON.stringify(updated));
+    try {
+      await updateDoc(doc(db, 'scripts', id), {
+        name,
+        updatedAt: serverTimestamp(),
+      });
+    } catch (e) {
+      console.error(e);
+    }
   };
 
   React.useEffect(() => {
@@ -450,6 +522,7 @@ export default function ScriptPage() {
 
   const addShot = () => {
     const newShot: Shot = {
+      id: `shot_${Date.now()}_${Math.random().toString(36).substring(7)}`,
       shot_number:
         shots.length > 0 ? Math.max(...shots.map((s) => s.shot_number)) + 1 : 1,
       duration: initialData.PODCAST_SHOTS[shots.length]?.duration || 8,
@@ -488,16 +561,43 @@ export default function ScriptPage() {
       formData.append('file', img.file);
       fetch('/api/images', { method: 'POST', body: formData })
         .then((res) => (res.ok ? res.json() : null))
-        .then((data) => {
+        .then(async (data) => {
           if (!data?.url) return;
           const blobUrl = data.url;
           setImages((prev) =>
             prev.map((i) => (i.id === img.id ? { ...i, blobUrl } : i))
           );
-          saveImageToLibrary(img.id, img.file, blobUrl).catch(() => {});
+          try {
+            const userLibRef = doc(db, 'imageLibraries', user!.uid);
+            const userLibSnap = await getDoc(userLibRef);
+
+            if (!userLibSnap.exists()) {
+              await setDoc(userLibRef, {
+                userId: user!.uid,
+                createdAt: serverTimestamp(),
+                updatedAt: serverTimestamp(),
+              });
+            } else {
+              await updateDoc(userLibRef, {
+                updatedAt: serverTimestamp(),
+              });
+            }
+
+            await setDoc(
+              doc(db, 'imageLibraries', user!.uid, 'images', img.id),
+              {
+                id: img.id,
+                name: img.file.name,
+                blobUrl,
+                createdAt: serverTimestamp(),
+              }
+            );
+          } catch (e) {
+            console.error('Failed to save image to firestore', e);
+          }
         })
-        .catch(() => {
-          saveImageToLibrary(img.id, img.file).catch(() => {});
+        .catch((e) => {
+          console.error('Failed to upload image', e);
         });
     });
 
@@ -841,10 +941,6 @@ export default function ScriptPage() {
                             }
                           }
                           setGlobals(newGlobals);
-                          localStorage.setItem(
-                            `thread_${activeThreadId}_globals`,
-                            JSON.stringify(newGlobals)
-                          );
                           setIsBulkEditing(false);
                           setIsGlobalsExpanded(false);
                         }}
@@ -1118,7 +1214,9 @@ export default function ScriptPage() {
                     const newShots: Shot[] = (
                       parsed as Record<string, unknown>[]
                     ).map((raw, i) => {
-                      const base = shots[i] ?? {};
+                      const base = shots[i] ?? {
+                        id: `shot_${Date.now()}_${Math.random().toString(36).substring(7)}`,
+                      };
                       const cleaned: Partial<Shot> = {};
                       for (const key of Object.keys(raw)) {
                         if (VALID_KEYS.has(key)) {
@@ -1134,10 +1232,6 @@ export default function ScriptPage() {
                       return { ...base, ...cleaned, status: 'idle' } as Shot;
                     });
                     setShots(newShots);
-                    localStorage.setItem(
-                      `thread_${activeThreadId}_shots`,
-                      JSON.stringify(newShots)
-                    );
                     setIsShotsBulkEditing(false);
                     if (discardedKeys.size > 0) {
                       const msg = `Unknown keys discarded: ${[...discardedKeys].join(', ')}`;
@@ -1210,11 +1304,14 @@ export default function ScriptPage() {
                                   Generating
                                 </span>
                               )}
-                              {shot.status === 'completed' && (
-                                <span className="px-2 py-0.5 bg-emerald-100 text-emerald-700 font-medium text-[10px] uppercase tracking-wider rounded-full">
-                                  Done
-                                </span>
-                              )}
+                              {generatedVideos.some(
+                                (v) => v.shotNumber === shot.shot_number
+                              ) &&
+                                shot.status !== 'generating' && (
+                                  <span className="px-2 py-0.5 bg-emerald-100 text-emerald-700 font-medium text-[10px] uppercase tracking-wider rounded-full">
+                                    Done
+                                  </span>
+                                )}
                               {shot.status === 'error' && (
                                 <span className="px-2 py-0.5 bg-red-100 text-red-700 font-medium text-[10px] uppercase tracking-wider rounded-full">
                                   Error
@@ -1770,13 +1867,24 @@ export default function ScriptPage() {
                               .map((id) => images.find((img) => img.id === id))
                               .filter(Boolean)
                               .map(async (img) => {
+                                let fileObj = img!.file;
+                                if (!fileObj && img!.blobUrl) {
+                                  const r = await fetch(img!.blobUrl);
+                                  const b = await r.blob();
+                                  fileObj = new File([b], 'image.jpg', {
+                                    type: b.type || 'image/jpeg',
+                                  });
+                                }
+                                if (!fileObj)
+                                  throw new Error('Image file missing');
+
                                 const base64 = await resizeImageToBase64(
-                                  img!.file,
+                                  fileObj,
                                   1024
                                 );
                                 return {
                                   base64,
-                                  mimeType: 'image/jpeg',
+                                  mimeType: fileObj.type || 'image/jpeg',
                                 };
                               })
                           );
@@ -1794,6 +1902,10 @@ export default function ScriptPage() {
                             model === 'seedance-1.5-pro';
                           let route: string;
                           let body: Record<string, unknown>;
+                          const existingCount = generatedVideos.filter(
+                            (v) => v.shotNumber === shot.shot_number
+                          ).length;
+
                           const base = {
                             prompt: finalPrompt,
                             modelName: model,
@@ -1801,7 +1913,7 @@ export default function ScriptPage() {
                             resolution: shot.resolution,
                             apiKey,
                             shotNumber: shot.shot_number,
-                            existingCount: shot.generatedVideoUrls?.length ?? 0,
+                            existingCount: existingCount,
                           };
 
                           if (isKling) {
@@ -1834,8 +1946,7 @@ export default function ScriptPage() {
                               model: actualModel,
                               duration: shot.duration,
                               shotNumber: shot.shot_number,
-                              existingCount:
-                                shot.generatedVideoUrls?.length ?? 0,
+                              existingCount: existingCount,
                               imageUrls:
                                 klingImages.length > 0
                                   ? klingImages.map((img) => img!.blobUrl)
@@ -1883,23 +1994,65 @@ export default function ScriptPage() {
                               res.headers.get('x-video-filename') ||
                               `shot_${shot.shot_number}.mp4`;
                             try {
-                              await saveGeneratedVideo(
-                                activeThreadId,
-                                filename,
-                                blob
+                              const uploadRes = await fetch(
+                                `/api/upload?filename=${activeThreadId}_${filename}`,
+                                {
+                                  method: 'POST',
+                                  body: blob,
+                                }
                               );
-                              console.log(
-                                `[generate-video] saved to IndexedDB as ${filename}`
-                              );
+                              const uploadData = await uploadRes.json();
+                              if (uploadData?.url) {
+                                videoUrl = uploadData.url;
+                                const docId = `${activeThreadId}_${filename.replace(/\./g, '_')}`;
+                                const videoRef = doc(
+                                  db,
+                                  'generatedVideos',
+                                  docId
+                                );
+                                const videoSnap = await getDoc(videoRef);
+
+                                const videoData: any = {
+                                  scriptId: activeThreadId,
+                                  userId: user?.uid,
+                                  shotId: shot.id,
+                                  blobUrl: videoUrl,
+                                  updatedAt: serverTimestamp(),
+                                };
+
+                                if (!videoSnap.exists()) {
+                                  videoData.createdAt = serverTimestamp();
+                                }
+
+                                await setDoc(videoRef, videoData, {
+                                  merge: true,
+                                });
+
+                                setGeneratedVideos((prev) => [
+                                  ...prev,
+                                  {
+                                    id: docId,
+                                    blobUrl: videoUrl!,
+                                    shotId: shot.id!,
+                                    shotNumber: shot.shot_number,
+                                    createdAt: Date.now(),
+                                  },
+                                ]);
+                                console.log(
+                                  `[generate-video] saved to Firestore as ${filename}`
+                                );
+                              } else {
+                                videoUrl = URL.createObjectURL(blob);
+                              }
                             } catch (e) {
                               console.warn(
-                                `[generate-video] IndexedDB save failed:`,
+                                `[generate-video] Firestore save failed:`,
                                 e
                               );
+                              videoUrl = URL.createObjectURL(blob);
                             }
-                            videoUrl = URL.createObjectURL(blob);
                             console.log(
-                              `[generate-video] blob URL created: ${videoUrl}`
+                              `[generate-video] video URL ready: ${videoUrl}`
                             );
                           } else {
                             const data = await res.json();
@@ -1910,46 +2063,40 @@ export default function ScriptPage() {
                             );
                           }
 
-                          setShots((prev) => {
-                            const newShots = [...prev];
-                            if (videoUrl) {
-                              const existingUrls =
-                                newShots[i].generatedVideoUrls || [];
-                              const mergedUrls = Array.from(
-                                new Set([...existingUrls, videoUrl])
-                              );
+                          if (videoUrl) {
+                            setShots((prev) => {
+                              const newShots = [...prev];
                               newShots[i] = {
                                 ...newShots[i],
                                 status: 'completed',
-                                generatedVideoUrl: videoUrl,
-                                generatedVideoUrls: mergedUrls,
                               };
+                              return newShots;
+                            });
 
-                              // Trigger hover animation for 3 seconds
-                              setRecentSuccessUrls((prev) => [
-                                ...prev,
-                                videoUrl!,
-                              ]);
-                              setTimeout(() => {
-                                setRecentSuccessUrls((prev) =>
-                                  prev.filter((u) => u !== videoUrl)
-                                );
-                              }, 3000);
-                            } else {
+                            // Trigger hover animation for 3 seconds
+                            setRecentSuccessUrls((prev) => [
+                              ...prev,
+                              videoUrl!,
+                            ]);
+                            setTimeout(() => {
+                              setRecentSuccessUrls((prev) =>
+                                prev.filter((u) => u !== videoUrl)
+                              );
+                            }, 3000);
+                          } else {
+                            setShots((prev) => {
+                              const newShots = [...prev];
                               newShots[i] = {
                                 ...newShots[i],
                                 status: 'error',
                               };
-                              console.warn(
-                                'Failed to generate video:',
-                                errorMsg
-                              );
-                              showGenerationToast(
-                                `Shot ${shots[i].shot_number}: ${errorMsg}`
-                              );
-                            }
-                            return newShots;
-                          });
+                              return newShots;
+                            });
+                            console.warn('Failed to generate video:', errorMsg);
+                            showGenerationToast(
+                              `Shot ${shots[i].shot_number}: ${errorMsg}`
+                            );
+                          }
                         } catch (error: unknown) {
                           const isAbortError =
                             error instanceof Error &&
@@ -2123,16 +2270,8 @@ export default function ScriptPage() {
             <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
               Generated Media
               <span className="text-xs font-normal text-slate-500 bg-white px-2 py-0.5 rounded-full border border-slate-200">
-                {shots.reduce(
-                  (acc, s) => acc + (s.generatedVideoUrls?.length ?? 0),
-                  0
-                )}{' '}
-                {shots.reduce(
-                  (acc, s) => acc + (s.generatedVideoUrls?.length ?? 0),
-                  0
-                ) === 1
-                  ? 'video'
-                  : 'videos'}
+                {generatedVideos.length}{' '}
+                {generatedVideos.length === 1 ? 'video' : 'videos'}
               </span>
             </h2>
             <div className="text-slate-400">{isMediaExpanded ? '▼' : '▶'}</div>
@@ -2140,104 +2279,105 @@ export default function ScriptPage() {
 
           {isMediaExpanded && (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 overflow-y-auto max-h-[60vh] lg:max-h-none lg:h-full content-start pr-2">
-              {shots.filter((s) => s.generatedVideoUrls?.length).length === 0 &&
+              {generatedVideos.length === 0 &&
               shots.filter((s) => s.status === 'generating').length === 0 ? (
                 <div className="col-span-full text-center text-slate-500 text-sm mt-4 p-6 border border-dashed border-slate-300 rounded-lg bg-slate-50">
                   No generated videos yet. Select shots to generate.
                 </div>
               ) : (
                 <>
-                  {shots.flatMap((shot) => {
-                    const urls = shot.generatedVideoUrls || [];
-                    if (
-                      urls.length === 0 &&
-                      shot.generatedVideoUrl &&
-                      shot.status === 'completed'
-                    ) {
-                      urls.push(shot.generatedVideoUrl);
-                    }
-                    return urls.map((url, i) => {
-                      const versionLabel =
-                        urls.length > 1 ? ` (v${i + 1})` : '';
-                      const isRecent = recentSuccessUrls.includes(url);
+                  {generatedVideos.map((video, i) => {
+                    const shotVideos = generatedVideos.filter(
+                      (v) => v.shotId === video.shotId
+                    );
+                    const versionIndex = shotVideos.indexOf(video);
+                    const versionLabel =
+                      shotVideos.length > 1 ? ` (v${versionIndex + 1})` : '';
+                    const isRecent = recentSuccessUrls.includes(video.blobUrl);
 
-                      return (
-                        <div
-                          key={`vid-${shot.shot_number}-${i}`}
-                          className={`bg-white rounded-xl p-3 border w-full flex flex-col transition-all duration-500 ${
-                            isRecent
-                              ? 'border-violet-500 ring-2 ring-violet-500 shadow-md ring-opacity-50'
-                              : 'border-slate-200 shadow-sm'
-                          }`}
-                        >
-                          <div className="text-sm font-semibold text-slate-800 mb-2 flex items-center justify-between px-1">
-                            <span>
-                              Shot {shot.shot_number}
-                              {versionLabel}
-                            </span>
-                            <div className="flex items-center gap-2">
-                              <button
-                                onClick={() => {
-                                  const a = document.createElement('a');
-                                  a.href = url;
-                                  a.download = `Shot_${shot.shot_number}${versionLabel}.mp4`;
-                                  a.click();
-                                }}
-                                className="text-xs text-violet-600 hover:text-violet-700 font-medium"
-                              >
-                                Download
-                              </button>
-                              <button
-                                onClick={() =>
-                                  setVideoToDelete({
-                                    shotIndex: i,
-                                    urlIndex: i,
-                                    url,
-                                  })
-                                }
-                                className="text-slate-400 hover:text-red-500 transition-colors px-1"
-                                title="Delete video"
-                              >
-                                ×
-                              </button>
-                            </div>
+                    const parentShot = shots.find((s) => s.id === video.shotId);
+                    const displayShotNumber = parentShot?.shot_number || '?';
+
+                    return (
+                      <div
+                        key={video.id}
+                        className={`bg-white rounded-xl p-3 border w-full flex flex-col transition-all duration-500 ${
+                          isRecent
+                            ? 'border-violet-500 ring-2 ring-violet-500 shadow-md ring-opacity-50'
+                            : 'border-slate-200 shadow-sm'
+                        }`}
+                      >
+                        <div className="text-sm font-semibold text-slate-800 mb-2 flex items-center justify-between px-1">
+                          <span>
+                            Shot {displayShotNumber}
+                            {versionLabel}
+                          </span>
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={() => {
+                                const a = document.createElement('a');
+                                a.href = video.blobUrl;
+                                a.download = `Shot_${displayShotNumber}${versionLabel}.mp4`;
+                                a.click();
+                              }}
+                              className="text-xs text-violet-600 hover:text-violet-700 font-medium"
+                            >
+                              Download
+                            </button>
+                            <button
+                              onClick={() =>
+                                setVideoToDelete({
+                                  shotIndex: shots.findIndex(
+                                    (s) => s.id === video.shotId
+                                  ),
+                                  urlIndex: i,
+                                  url: video.blobUrl,
+                                })
+                              }
+                              className="text-slate-400 hover:text-red-500 transition-colors px-1"
+                              title="Delete video"
+                            >
+                              ×
+                            </button>
                           </div>
+                        </div>
+                        <div
+                          className="relative w-full rounded-lg bg-slate-900 aspect-video cursor-pointer overflow-hidden group"
+                          onClick={() => setPlayingVideoUrl(video.blobUrl)}
+                        >
+                          <video
+                            src={video.blobUrl}
+                            preload="metadata"
+                            className="w-full h-full object-cover pointer-events-none"
+                          />
                           <div
-                            className="relative w-full rounded-lg bg-slate-900 aspect-video cursor-pointer overflow-hidden group"
-                            onClick={() => setPlayingVideoUrl(url)}
+                            className={`absolute inset-0 transition-colors flex items-center justify-center ${
+                              isRecent
+                                ? 'bg-slate-900/30'
+                                : 'bg-slate-900/10 group-hover:bg-slate-900/30'
+                            }`}
                           >
-                            <video
-                              src={url}
-                              preload="metadata"
-                              className="w-full h-full object-cover pointer-events-none"
-                            />
                             <div
-                              className={`absolute inset-0 transition-colors flex items-center justify-center ${
+                              className={`w-10 h-10 bg-white/90 backdrop-blur rounded-full flex items-center justify-center text-slate-900 pl-1 shadow-md transition-transform ${
                                 isRecent
-                                  ? 'bg-slate-900/30'
-                                  : 'bg-slate-900/10 group-hover:bg-slate-900/30'
+                                  ? 'scale-110'
+                                  : 'transform group-hover:scale-110'
                               }`}
                             >
-                              <div
-                                className={`w-10 h-10 bg-white/90 backdrop-blur rounded-full flex items-center justify-center text-slate-900 pl-1 shadow-md transition-transform ${
-                                  isRecent
-                                    ? 'scale-110'
-                                    : 'transform group-hover:scale-110'
-                                }`}
-                              >
-                                ▶
-                              </div>
+                              ▶
                             </div>
                           </div>
                         </div>
-                      );
-                    });
+                      </div>
+                    );
                   })}
                   {shots
                     .filter((s) => s.status === 'generating')
                     .map((shot) => {
-                      const nextVersion = shot.generatedVideoUrls?.length
-                        ? ` (v${shot.generatedVideoUrls.length + 1})`
+                      const nextVersion = generatedVideos.filter(
+                        (v) => v.shotId === shot.id
+                      ).length
+                        ? ` (v${generatedVideos.filter((v) => v.shotId === shot.id).length + 1})`
                         : '';
                       return (
                         <div
@@ -2343,10 +2483,6 @@ export default function ScriptPage() {
                     newGlobals[editingVarIndex] = editingVarContent;
                   }
                   setGlobals(newGlobals);
-                  localStorage.setItem(
-                    `thread_${activeThreadId}_globals`,
-                    JSON.stringify(newGlobals)
-                  );
                   setEditingVarIndex(null);
                   if (editingVarIndex >= globals.length) {
                     setIsGlobalsExpanded(false);
@@ -2380,10 +2516,6 @@ export default function ScriptPage() {
         message="Are you sure you want to delete all variables?"
         onConfirm={() => {
           setGlobals([]);
-          localStorage.setItem(
-            `thread_${activeThreadId}_globals`,
-            JSON.stringify([])
-          );
           setIsDeletingAllVars(false);
         }}
         onCancel={() => setIsDeletingAllVars(false)}
@@ -2398,10 +2530,6 @@ export default function ScriptPage() {
             const newG = [...globals];
             newG.splice(varToDelete, 1);
             setGlobals(newG);
-            localStorage.setItem(
-              `thread_${activeThreadId}_globals`,
-              JSON.stringify(newG)
-            );
             setVarToDelete(null);
           }
         }}
@@ -2412,10 +2540,9 @@ export default function ScriptPage() {
         isOpen={imageToDelete !== null}
         title="Delete Image"
         message="Are you sure you want to permanently delete this image from your library?"
-        onConfirm={() => {
+        onConfirm={async () => {
           if (imageToDelete) {
             const imgToDelete = images.find((img) => img.id === imageToDelete);
-            deleteLibraryImage(imageToDelete).catch(() => {});
             if (imgToDelete?.blobUrl) {
               fetch('/api/images', {
                 method: 'DELETE',
@@ -2423,6 +2550,20 @@ export default function ScriptPage() {
                 body: JSON.stringify({ url: imgToDelete.blobUrl }),
               }).catch(() => {});
             }
+
+            try {
+              const batch = writeBatch(db);
+              batch.delete(
+                doc(db, 'imageLibraries', user!.uid, 'images', imageToDelete)
+              );
+              batch.update(doc(db, 'imageLibraries', user!.uid), {
+                updatedAt: serverTimestamp(),
+              });
+              await batch.commit();
+            } catch (e) {
+              console.error('Failed to delete image from firestore', e);
+            }
+
             setImages((prev) => prev.filter((img) => img.id !== imageToDelete));
             setShots((prev) =>
               prev.map((s) => ({
@@ -2440,32 +2581,30 @@ export default function ScriptPage() {
         isOpen={videoToDelete !== null}
         title="Delete Video"
         message="Are you sure you want to remove this video from your generated media?"
-        onConfirm={() => {
+        onConfirm={async () => {
           if (videoToDelete !== null) {
-            const { shotIndex, url } = videoToDelete;
-            // Remove from IndexedDB — extract filename from blob URL or path
-            const filename = url.split('/').pop();
-            if (filename)
-              deleteGeneratedVideo(activeThreadId, filename).catch(() => {});
-
-            setShots((prev) => {
-              const newShots = [...prev];
-              const targetShot = newShots[shotIndex];
-              if (targetShot && targetShot.generatedVideoUrls) {
-                targetShot.generatedVideoUrls =
-                  targetShot.generatedVideoUrls.filter((u) => u !== url);
-                if (targetShot.generatedVideoUrl === url) {
-                  targetShot.generatedVideoUrl =
-                    targetShot.generatedVideoUrls[
-                      targetShot.generatedVideoUrls.length - 1
-                    ] || undefined;
-                }
-                if (targetShot.generatedVideoUrls.length === 0) {
-                  targetShot.status = 'idle';
-                }
+            const { url } = videoToDelete;
+            // Remove from Firestore
+            try {
+              const videosSnap = await getDocs(
+                query(
+                  collection(db, 'generatedVideos'),
+                  where('scriptId', '==', activeThreadId)
+                )
+              );
+              const docToDelete = videosSnap.docs.find(
+                (d) => d.data().blobUrl === url
+              );
+              if (docToDelete) {
+                const batch = writeBatch(db);
+                batch.delete(docToDelete.ref);
+                await batch.commit();
               }
-              return newShots;
-            });
+            } catch (e) {
+              console.error('Failed to delete video from firestore', e);
+            }
+
+            setGeneratedVideos((prev) => prev.filter((v) => v.blobUrl !== url));
             setVideoToDelete(null);
           }
         }}
