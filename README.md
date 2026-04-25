@@ -12,7 +12,7 @@ Generate short AI-presented videos end-to-end from a text topic. Describe an ava
 4. **Generate** — The pipeline runs automatically:
    - Gemini writes the script
    - Cartesia synthesises the voiceover
-   - Sync.so lip-syncs the avatar to the audio
+   - Lip-syncs the avatar to the audio (TBD)
 5. **Watch your video** — The finished video appears on the status page when ready.
 
 ---
@@ -28,7 +28,7 @@ Generate short AI-presented videos end-to-end from a text topic. Describe an ava
 | Avatar Image   | Google Gemini (`gemini-3.1-flash-image-preview`) |
 | Script         | Google Gemini via LangChain                      |
 | Text-to-Speech | Cartesia                                         |
-| Lip Sync       | Sync.so                                          |
+| Lip Sync       | SkyReels (Gradio)                                |
 
 ---
 
@@ -53,7 +53,6 @@ UPSTASH_REDIS_REST_URL=       # From Upstash console
 UPSTASH_REDIS_REST_TOKEN=     # From Upstash console
 GEMINI_API_KEY= # From Google AI Studio
 CARTESIA_API_KEY=             # From Cartesia dashboard
-SYNCSO_API_KEY=               # From Sync.so dashboard
 NEXT_PUBLIC_APP_URL=http://localhost:3000
 STORAGE_PATH=./storage
 ```
@@ -80,8 +79,7 @@ src/
 │       ├── avatar/generate/        # POST — Gemini avatar image
 │       ├── pipeline/create/        # POST — Start pipeline job
 │       ├── pipeline/[id]/          # GET  — Job status
-│       ├── storage/[id]/video/     # GET  — Serve video file
-│       └── webhooks/syncso/        # POST — Sync.so callback
+│       └── storage/[id]/video/     # GET  — Serve video file
 ├── lib/
 │   ├── types.ts                    # Shared TypeScript interfaces
 │   ├── redis.ts                    # Upstash Redis singleton
@@ -90,7 +88,7 @@ src/
     ├── gemini-image.ts             # Avatar generation
     ├── gemini-script.ts            # Script generation
     ├── cartesia.ts                 # TTS
-    └── syncso.ts                   # Lip sync submission
+    └── skyreels.ts                 # Talking-head via SkyReels
 ```
 
 ---

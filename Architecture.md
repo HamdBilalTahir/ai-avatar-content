@@ -57,7 +57,7 @@ The app has three distinct product areas accessible via a left sidebar:
 | Script AI Generation | ✅ Done | Gemini via LangChain → `/api/script/generate`                       |
 | Video Maker          | ✅ Done | Browser NLE with timeline, clip trimming, ffmpeg export             |
 | TTS / Voice          | 🔲 TBD  | Cartesia                                                            |
-| Lip Sync             | 🔲 TBD  | Sync.so / SkyReels (Gradio)                                         |
+| Lip Sync             | 🔲 TBD  | SkyReels (Gradio)                                                   |
 | Pipeline Status Page | 🔲 TBD  | Polling UI at `/pipeline/[id]`                                      |
 | CI/CD                | 🔲 TBD  | —                                                                   |
 
@@ -87,11 +87,9 @@ The app has three distinct product areas accessible via a left sidebar:
 
 ### Infrastructure & Data
 
-| Layer             | Technology       | Version | Purpose                               |
-| ----------------- | ---------------- | ------- | ------------------------------------- |
-| Job State         | `@upstash/redis` | ^1.37.0 | Serverless-safe Redis over HTTP       |
-| File Download     | `axios`          | ^1.13.6 | Download completed video from Sync.so |
-| Multipart Uploads | `form-data`      | ^4.0.5  | Submit audio + image to Sync.so       |
+| Layer     | Technology       | Version | Purpose                         |
+| --------- | ---------------- | ------- | ------------------------------- |
+| Job State | `@upstash/redis` | ^1.37.0 | Serverless-safe Redis over HTTP |
 
 ### Utilities
 
@@ -445,11 +443,10 @@ Client automatically routes each shot to the correct API endpoint based on model
 
 Used exclusively for async pipeline job state. Communicates over HTTP (REST) — safe in serverless routes.
 
-| Key                      | Value                        | TTL   | Purpose                    |
-| ------------------------ | ---------------------------- | ----- | -------------------------- |
-| `job:{job_id}`           | JSON string of `PipelineJob` | None  | Primary job record         |
-| `avatar:{job_id}`        | base64 image string          | 3600s | Temporary avatar storage   |
-| `syncso:{syncso_job_id}` | `job_id` string              | None  | Reverse lookup for webhook |
+| Key               | Value                        | TTL   | Purpose                  |
+| ----------------- | ---------------------------- | ----- | ------------------------ |
+| `job:{job_id}`    | JSON string of `PipelineJob` | None  | Primary job record       |
+| `avatar:{job_id}` | base64 image string          | 3600s | Temporary avatar storage |
 
 All Redis access goes through `src/lib/jobs.ts`. No route imports `redis` directly.
 
@@ -539,7 +536,6 @@ interface PipelineJob {
   script: string | null;
   audio_path: string | null;
   avatar_image_path: string | null;
-  syncso_job_id: string | null;
   final_video_path: string | null;
   error: string | null;
   created_at: number;
@@ -800,9 +796,6 @@ GOOGLE_API_KEY=
 # Cartesia
 CARTESIA_API_KEY=
 
-# Sync.so
-SYNCSO_API_KEY=
-
 # App
 NEXT_PUBLIC_APP_URL=http://localhost:3000
 STORAGE_PATH=./storage
@@ -825,11 +818,10 @@ STORAGE_PATH=./storage
 
 Generated files for async pipeline jobs are saved to `./storage/{job_id}/` (gitignored).
 
-| File         | Written By           | Purpose                  |
-| ------------ | -------------------- | ------------------------ |
-| `avatar.png` | Pipeline TTS stage   | Avatar image for Sync.so |
-| `audio.wav`  | Cartesia service     | TTS output               |
-| `video.mp4`  | Post-webhook handler | Downloaded from Sync.so  |
+| File         | Written By         | Purpose                  |
+| ------------ | ------------------ | ------------------------ |
+| `avatar.png` | Pipeline TTS stage | Avatar image for Sync.so |
+| `audio.wav`  | Cartesia service   | TTS output               |
 
 ### Veo Generated Videos
 

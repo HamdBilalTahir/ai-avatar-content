@@ -14,6 +14,7 @@ interface StoredImage {
   filename: string;
   mimeType: string;
   blob: Blob;
+  blobUrl?: string;
 }
 
 function openDb(): Promise<IDBDatabase> {
@@ -32,7 +33,8 @@ function openDb(): Promise<IDBDatabase> {
 
 export async function saveImageToLibrary(
   id: string,
-  file: File
+  file: File,
+  blobUrl?: string
 ): Promise<void> {
   const db = await openDb();
   return new Promise((resolve, reject) => {
@@ -42,6 +44,7 @@ export async function saveImageToLibrary(
       filename: file.name,
       mimeType: file.type || 'image/jpeg',
       blob: file,
+      ...(blobUrl && { blobUrl }),
     } satisfies StoredImage);
     tx.oncomplete = () => {
       db.close();
@@ -55,7 +58,7 @@ export async function saveImageToLibrary(
 }
 
 export async function loadAllLibraryImages(): Promise<
-  { id: string; file: File; previewUrl: string }[]
+  { id: string; file: File; previewUrl: string; blobUrl?: string }[]
 > {
   const db = await openDb();
   return new Promise((resolve, reject) => {
@@ -72,6 +75,7 @@ export async function loadAllLibraryImages(): Promise<
             id: item.id,
             file,
             previewUrl: URL.createObjectURL(item.blob),
+            blobUrl: item.blobUrl,
           };
         })
       );

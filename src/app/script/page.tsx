@@ -8,8 +8,9 @@ import { ConfirmPopup } from '@/components/ConfirmPopup';
 import PromptEditor from '@/components/PromptEditor';
 import {
   saveGeneratedVideo,
-  loadAllGeneratedVideos,
+  loadGeneratedVideosByThread,
   deleteGeneratedVideo,
+  migrateVideosToThread,
 } from '@/lib/generatedVideosDb';
 import {
   saveImageToLibrary,
@@ -21,6 +22,7 @@ type Shot = {
   shot_number: number;
   duration: number | string;
   resolution: string;
+  aspectRatio: string;
   imageRefs: string[];
   prompt: string;
   selected?: boolean;
@@ -33,7 +35,48 @@ type ImageItem = {
   id: string;
   file: File;
   previewUrl: string;
+  blobUrl?: string;
 };
+
+type ScriptThread = {
+  id: string;
+  name: string;
+  createdAt: number;
+};
+
+function tryParseShots(raw: string): Shot[] {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return [];
+  }
+}
+
+function inferThreadName(shots: Shot[]): string {
+  if (!shots.length) return 'Script 1';
+  // Walk all shot prompts and collect the first descriptive line
+  // (skip style/technical boilerplate lines)
+  const skip =
+    /^(style:|camera:|human movement:|no |single |only |aspect|resolution|duration)/i;
+  for (const shot of shots.slice(0, 3)) {
+    const lines = (shot.prompt || '')
+      .split('\n')
+      .map((l) => l.trim())
+      .filter(Boolean);
+    for (const line of lines) {
+      if (!skip.test(line) && line.length > 8) {
+        // Take up to 5 words, strip trailing punctuation
+        const name = line
+          .split(/\s+/)
+          .slice(0, 5)
+          .join(' ')
+          .replace(/[.,;:!?]+$/, '');
+        if (name.length > 4) return name;
+      }
+    }
+  }
+  return `${shots.length}-Shot Script`;
+}
 
 /** Return a base64 string for the image. If the file exceeds 4 MB, resize to ≤1024px first. */
 async function resizeImageToBase64(file: File, maxPx: number): Promise<string> {
@@ -62,6 +105,10 @@ async function resizeImageToBase64(file: File, maxPx: number): Promise<string> {
 }
 
 export default function ScriptPage() {
+  const [threads, setThreads] = useState<ScriptThread[]>([]);
+  const [activeThreadId, setActiveThreadId] = useState('');
+  const [editingThreadId, setEditingThreadId] = useState<string | null>(null);
+  const [editingThreadName, setEditingThreadName] = useState('');
   const [shots, setShots] = useState<Shot[]>([]);
   const [isLoaded, setIsLoaded] = useState(false);
   const [expandedShotIndex, setExpandedShotIndex] = useState<number | null>(0);
@@ -139,87 +186,99 @@ export default function ScriptPage() {
     }
   }, [recentSuccessUrls]);
 
-  React.useEffect(() => {
-    const savedShots = localStorage.getItem('podcast_shots');
-    if (savedShots) {
-      try {
-        const parsed = JSON.parse(savedShots);
-        const resetShots = parsed.map((s: Shot) => {
-          // Strip ephemeral server URLs — only blob: URLs survive a reload
-          const cleanUrls = (s.generatedVideoUrls ?? []).filter((u: string) =>
-            u.startsWith('blob:')
-          );
-          return {
-            ...s,
-            status: s.status === 'generating' ? 'idle' : s.status,
-            imageRefs: Array.isArray(s.imageRefs)
-              ? s.imageRefs.filter((ref) => ref !== '1' && ref !== '2')
-              : [],
-            generatedVideoUrls: cleanUrls,
-            generatedVideoUrl: cleanUrls[cleanUrls.length - 1] ?? undefined,
-          };
-        });
+  // Restore shots + videos for a given thread id (used on mount and on switch)
+  const restoreThreadShots = (threadId: string, rawShots: Shot[]) => {
+    // Always clear video URLs — blob: URLs expire on page unload. IndexedDB repopulates fresh ones.
+    const resetShots = rawShots.map(
+      (s: Shot) =>
+        ({
+          ...s,
+          status:
+            s.status === 'generating' ? 'idle' : (s.status as Shot['status']),
+          imageRefs: Array.isArray(s.imageRefs)
+            ? s.imageRefs.filter((ref) => ref !== '1' && ref !== '2')
+            : [],
+          generatedVideoUrls: [],
+          generatedVideoUrl: undefined,
+        }) as Shot
+    );
+    setShots(resetShots);
 
-        setShots(resetShots);
-
-        // Restore generated videos from IndexedDB (works on Vercel where /tmp is ephemeral)
-        loadAllGeneratedVideos()
-          .then((stored) => {
-            if (stored.length === 0) return;
-            // Build a map: filename → blobUrl
-            const blobMap = new Map(stored.map((v) => [v.id, v.blobUrl]));
-
-            setShots((prev) =>
-              prev.map((shot) => {
-                const matchingUrls = [...blobMap.entries()]
-                  .filter(
-                    ([id]) =>
-                      id.startsWith(`shot_${shot.shot_number}.`) ||
-                      id.startsWith(`shot_${shot.shot_number}_`)
-                  )
-                  .map(([, url]) => url);
-                if (matchingUrls.length === 0) return shot;
-                // Replace stale blob URLs (from previous session) with fresh IndexedDB ones
-                return {
-                  ...shot,
-                  generatedVideoUrls: matchingUrls,
-                  generatedVideoUrl: matchingUrls[matchingUrls.length - 1],
-                  status:
-                    shot.status !== 'generating' ? 'completed' : shot.status,
-                };
-              })
-            );
-          })
-          .catch(() => {
-            /* IndexedDB unavailable, skip */
-          });
-      } catch {
-        setShots(
-          initialData.PODCAST_SHOTS.map((s) => ({ ...s, selected: false }))
+    loadGeneratedVideosByThread(threadId)
+      .then((stored) => {
+        console.log(
+          `[restore] ${threadId}: ${stored.length} videos in IndexedDB`,
+          stored.map((v) => v.id)
         );
-      }
-    } else {
-      setShots(
-        initialData.PODCAST_SHOTS.map((s) => ({ ...s, selected: false }))
+        if (stored.length === 0) return;
+        const blobMap = new Map(stored.map((v) => [v.id, v.blobUrl]));
+        setShots((prev) =>
+          prev.map((shot) => {
+            const matchingUrls = [...blobMap.entries()]
+              .filter(
+                ([id]) =>
+                  id.startsWith(`shot_${shot.shot_number}.`) ||
+                  id.startsWith(`shot_${shot.shot_number}_`)
+              )
+              .map(([, url]) => url);
+            if (matchingUrls.length === 0) return shot;
+            return {
+              ...shot,
+              generatedVideoUrls: matchingUrls,
+              generatedVideoUrl: matchingUrls[matchingUrls.length - 1],
+              status: 'completed',
+            } as Shot;
+          })
+        );
+      })
+      .catch((e) => {
+        console.warn('[restore] loadGeneratedVideosByThread failed:', e);
+      });
+  };
+
+  React.useEffect(() => {
+    // --- Load or create threads ---
+    let loadedThreads: ScriptThread[] = [];
+    try {
+      const raw = localStorage.getItem('script_threads');
+      if (raw) loadedThreads = JSON.parse(raw);
+    } catch {
+      /* malformed — start fresh */
+    }
+
+    if (loadedThreads.length === 0) {
+      // First run — migrate old localStorage keys into a default thread
+      const firstId = `t_${Date.now()}`;
+      const oldShots = localStorage.getItem('podcast_shots');
+      const oldGlobals = localStorage.getItem('podcast_globals');
+      if (oldShots) localStorage.setItem(`thread_${firstId}_shots`, oldShots);
+      if (oldGlobals)
+        localStorage.setItem(`thread_${firstId}_globals`, oldGlobals);
+      const inferredName = inferThreadName(
+        oldShots ? tryParseShots(oldShots) : []
       );
+      loadedThreads = [
+        { id: firstId, name: inferredName, createdAt: Date.now() },
+      ];
+      localStorage.setItem('script_threads', JSON.stringify(loadedThreads));
     }
 
-    const savedApiKey = localStorage.getItem('veo_api_key');
-    if (savedApiKey) {
-      setApiKey(savedApiKey);
-    }
+    setThreads(loadedThreads);
 
-    const savedModel = localStorage.getItem('veo_model');
-    if (savedModel) {
-      setModel(savedModel);
-    }
+    // --- Determine active thread ---
+    const savedActiveId = localStorage.getItem('active_thread_id');
+    const activeId =
+      loadedThreads.find((t) => t.id === savedActiveId)?.id ??
+      loadedThreads[loadedThreads.length - 1].id;
+    setActiveThreadId(activeId);
+    localStorage.setItem('active_thread_id', activeId);
 
-    const savedGlobals = localStorage.getItem('podcast_globals');
+    // --- Load active thread's globals ---
+    const savedGlobals = localStorage.getItem(`thread_${activeId}_globals`);
     if (savedGlobals) {
       try {
         const parsedGlobals = JSON.parse(savedGlobals);
         setGlobals(parsedGlobals);
-        // Collapse if there are saved globals, expand if empty
         setIsGlobalsExpanded(parsedGlobals.length === 0);
       } catch {
         setIsGlobalsExpanded(true);
@@ -228,23 +287,156 @@ export default function ScriptPage() {
       setIsGlobalsExpanded(true);
     }
 
-    // Load image library from IndexedDB
+    // --- Shared: API key, model, image library ---
+    const savedApiKey = localStorage.getItem('veo_api_key');
+    if (savedApiKey) setApiKey(savedApiKey);
+    const savedModel = localStorage.getItem('veo_model');
+    if (savedModel) setModel(savedModel);
+
     loadAllLibraryImages()
       .then((stored) => {
         if (stored.length > 0) setImages(stored);
       })
       .catch(() => {});
 
-    setIsLoaded(true);
+    // Migrate any bare-key IndexedDB videos to this thread, then load shots.
+    // Chained so loadGeneratedVideosByThread always runs after migration's write transaction.
+    const loadShotsAndMarkLoaded = () => {
+      const savedShots = localStorage.getItem(`thread_${activeId}_shots`);
+      if (savedShots) {
+        try {
+          restoreThreadShots(activeId, JSON.parse(savedShots));
+        } catch {
+          setShots([
+            {
+              shot_number: 1,
+              duration: initialData.PODCAST_SHOTS[0]?.duration || 8,
+              resolution: '720p',
+              aspectRatio: '16:9',
+              imageRefs: [],
+              prompt: '',
+              selected: false,
+            },
+          ]);
+        }
+      } else {
+        setShots([
+          {
+            shot_number: 1,
+            duration: initialData.PODCAST_SHOTS[0]?.duration || 8,
+            resolution: '720p',
+            aspectRatio: '16:9',
+            imageRefs: [],
+            prompt: '',
+            selected: false,
+          },
+        ]);
+      }
+      setIsLoaded(true);
+    };
+
+    migrateVideosToThread(activeId)
+      .then(loadShotsAndMarkLoaded)
+      .catch(loadShotsAndMarkLoaded);
   }, []);
 
   React.useEffect(() => {
-    if (isLoaded) {
-      localStorage.setItem('podcast_shots', JSON.stringify(shots));
+    if (isLoaded && activeThreadId) {
+      localStorage.setItem(
+        `thread_${activeThreadId}_shots`,
+        JSON.stringify(shots)
+      );
+      localStorage.setItem(
+        `thread_${activeThreadId}_globals`,
+        JSON.stringify(globals)
+      );
       localStorage.setItem('veo_api_key', apiKey);
       localStorage.setItem('veo_model', model);
     }
-  }, [shots, apiKey, model, isLoaded]);
+  }, [shots, globals, apiKey, model, isLoaded, activeThreadId]);
+
+  const switchThread = (id: string) => {
+    if (id === activeThreadId) return;
+    // Eagerly persist current thread before switching
+    localStorage.setItem(
+      `thread_${activeThreadId}_shots`,
+      JSON.stringify(shots)
+    );
+    localStorage.setItem(
+      `thread_${activeThreadId}_globals`,
+      JSON.stringify(globals)
+    );
+
+    setActiveThreadId(id);
+    localStorage.setItem('active_thread_id', id);
+
+    const savedShots = localStorage.getItem(`thread_${id}_shots`);
+    if (savedShots) {
+      try {
+        restoreThreadShots(id, JSON.parse(savedShots));
+      } catch {
+        setShots([
+          {
+            shot_number: 1,
+            duration: initialData.PODCAST_SHOTS[0]?.duration || 8,
+            resolution: '720p',
+            aspectRatio: '16:9',
+            imageRefs: [],
+            prompt: '',
+            selected: false,
+          },
+        ]);
+      }
+    } else {
+      setShots([
+        {
+          shot_number: 1,
+          duration: initialData.PODCAST_SHOTS[0]?.duration || 8,
+          resolution: '720p',
+          aspectRatio: '16:9',
+          imageRefs: [],
+          prompt: '',
+          selected: false,
+        },
+      ]);
+    }
+
+    const savedGlobals = localStorage.getItem(`thread_${id}_globals`);
+    try {
+      const g = savedGlobals ? JSON.parse(savedGlobals) : [];
+      setGlobals(g);
+      setIsGlobalsExpanded(g.length === 0);
+    } catch {
+      setGlobals([]);
+      setIsGlobalsExpanded(true);
+    }
+  };
+
+  const createThread = () => {
+    const id = `t_${Date.now()}`;
+    const name = `Script ${threads.length + 1}`;
+    const newThread: ScriptThread = { id, name, createdAt: Date.now() };
+    const updated = [newThread, ...threads];
+    setThreads(updated);
+    localStorage.setItem('script_threads', JSON.stringify(updated));
+    switchThread(id);
+  };
+
+  const deleteThread = (id: string) => {
+    if (threads.length === 1) return;
+    const updated = threads.filter((t) => t.id !== id);
+    setThreads(updated);
+    localStorage.setItem('script_threads', JSON.stringify(updated));
+    localStorage.removeItem(`thread_${id}_shots`);
+    localStorage.removeItem(`thread_${id}_globals`);
+    if (id === activeThreadId) switchThread(updated[updated.length - 1].id);
+  };
+
+  const renameThread = (id: string, name: string) => {
+    const updated = threads.map((t) => (t.id === id ? { ...t, name } : t));
+    setThreads(updated);
+    localStorage.setItem('script_threads', JSON.stringify(updated));
+  };
 
   React.useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -260,8 +452,9 @@ export default function ScriptPage() {
     const newShot: Shot = {
       shot_number:
         shots.length > 0 ? Math.max(...shots.map((s) => s.shot_number)) + 1 : 1,
-      duration: 8,
-      resolution: '720p',
+      duration: initialData.PODCAST_SHOTS[shots.length]?.duration || 8,
+      resolution: initialData.PODCAST_SHOTS[shots.length]?.resolution || '720p',
+      aspectRatio: '16:9',
       imageRefs: [],
       prompt: '',
       selected: false,
@@ -281,7 +474,7 @@ export default function ScriptPage() {
     }
   };
 
-  // Add images to library + persist to IndexedDB
+  // Add images to library + persist to IndexedDB, upload to Vercel Blob in background
   const addImagesToLibrary = (files: File[]) => {
     const newImages = files.map((file) => ({
       id: Math.random().toString(36).substring(7),
@@ -289,9 +482,25 @@ export default function ScriptPage() {
       previewUrl: URL.createObjectURL(file),
     }));
     setImages((prev) => [...prev, ...newImages]);
+
     newImages.forEach((img) => {
-      saveImageToLibrary(img.id, img.file).catch(() => {});
+      const formData = new FormData();
+      formData.append('file', img.file);
+      fetch('/api/images', { method: 'POST', body: formData })
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data) => {
+          if (!data?.url) return;
+          const blobUrl = data.url;
+          setImages((prev) =>
+            prev.map((i) => (i.id === img.id ? { ...i, blobUrl } : i))
+          );
+          saveImageToLibrary(img.id, img.file, blobUrl).catch(() => {});
+        })
+        .catch(() => {
+          saveImageToLibrary(img.id, img.file).catch(() => {});
+        });
     });
+
     return newImages;
   };
 
@@ -325,12 +534,111 @@ export default function ScriptPage() {
           </button>
         </div>
       )}
+      {/* Thread List Panel */}
+      <div className="hidden lg:flex flex-col w-52 shrink-0 border-r border-slate-200 bg-white overflow-hidden">
+        <div className="flex items-center justify-between px-3 py-3 border-b border-slate-200">
+          <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
+            Scripts
+          </span>
+          <button
+            onClick={createThread}
+            className="w-6 h-6 flex items-center justify-center rounded-md text-slate-400 hover:text-violet-600 hover:bg-violet-50 transition-colors text-lg leading-none"
+            title="New script"
+          >
+            +
+          </button>
+        </div>
+        <div className="flex-1 overflow-y-auto py-1">
+          {[...threads]
+            .sort((a, b) =>
+              a.id === activeThreadId ? -1 : b.id === activeThreadId ? 1 : 0
+            )
+            .map((thread) => (
+              <div
+                key={thread.id}
+                className={`group flex items-center gap-1 px-3 py-2 cursor-pointer transition-colors ${
+                  thread.id === activeThreadId
+                    ? 'bg-violet-50 text-violet-700'
+                    : 'text-slate-700 hover:bg-slate-50'
+                }`}
+                onClick={() => switchThread(thread.id)}
+              >
+                {editingThreadId === thread.id ? (
+                  <input
+                    autoFocus
+                    className="flex-1 text-sm bg-white border border-violet-400 rounded px-1 py-0.5 outline-none"
+                    value={editingThreadName}
+                    onChange={(e) => setEditingThreadName(e.target.value)}
+                    onBlur={() => {
+                      if (editingThreadName.trim())
+                        renameThread(thread.id, editingThreadName.trim());
+                      setEditingThreadId(null);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        if (editingThreadName.trim())
+                          renameThread(thread.id, editingThreadName.trim());
+                        setEditingThreadId(null);
+                      } else if (e.key === 'Escape') {
+                        setEditingThreadId(null);
+                      }
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                  />
+                ) : (
+                  <>
+                    <span
+                      className="flex-1 text-sm truncate"
+                      onDoubleClick={(e) => {
+                        e.stopPropagation();
+                        setEditingThreadId(thread.id);
+                        setEditingThreadName(thread.name);
+                      }}
+                    >
+                      {thread.name}
+                    </span>
+                    <button
+                      className="opacity-0 group-hover:opacity-100 shrink-0 w-4 h-4 flex items-center justify-center text-slate-400 hover:text-violet-500 transition-all text-xs"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setEditingThreadId(thread.id);
+                        setEditingThreadName(thread.name);
+                      }}
+                      title="Rename script"
+                    >
+                      ✎
+                    </button>
+                    {threads.length > 1 && (
+                      <button
+                        className="opacity-0 group-hover:opacity-100 shrink-0 w-4 h-4 flex items-center justify-center text-slate-400 hover:text-red-500 transition-all text-xs"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          deleteThread(thread.id);
+                        }}
+                        title="Delete script"
+                      >
+                        ✕
+                      </button>
+                    )}
+                  </>
+                )}
+              </div>
+            ))}
+        </div>
+      </div>
+
       {/* Left Pane: Shots Accordion */}
-      <div className="flex-1 lg:w-2/3 lg:max-w-[66.666667%] min-w-0 h-auto lg:h-full lg:overflow-y-auto overflow-x-hidden border-b lg:border-b-0 lg:border-r border-slate-200 p-4 lg:p-6 lg:pr-6 box-border">
-        <div className="sticky top-0 z-20 bg-slate-50 -mx-4 lg:-mx-6 px-4 lg:px-6 pt-4 lg:pt-6 pb-4 border-b border-slate-200 mb-6">
+      <div className="flex-1 min-w-0 h-auto lg:h-full lg:overflow-y-auto overflow-x-hidden border-b lg:border-b-0 lg:border-r border-slate-200 p-4 lg:p-6 lg:pr-6 box-border">
+        <div className="sticky top-0 z-20 bg-slate-50 -mx-4 lg:-mx-6 px-4 lg:px-6 pt-4 lg:pt-6 pb-4 border-b border-slate-200 mb-6 flex justify-between items-center">
           <h1 className="text-xl lg:text-2xl font-bold text-slate-900 leading-none">
             Video Script Editor
           </h1>
+          <button
+            onClick={createThread}
+            className="text-sm px-3 py-1.5 bg-violet-600 hover:bg-violet-700 text-white rounded-lg transition-colors font-medium flex items-center gap-1.5 shadow-sm"
+          >
+            + Create New
+          </button>
         </div>
 
         {/* Globals Section */}
@@ -534,7 +842,7 @@ export default function ScriptPage() {
                           }
                           setGlobals(newGlobals);
                           localStorage.setItem(
-                            'podcast_globals',
+                            `thread_${activeThreadId}_globals`,
                             JSON.stringify(newGlobals)
                           );
                           setIsBulkEditing(false);
@@ -827,7 +1135,7 @@ export default function ScriptPage() {
                     });
                     setShots(newShots);
                     localStorage.setItem(
-                      'podcast_shots',
+                      `thread_${activeThreadId}_shots`,
                       JSON.stringify(newShots)
                     );
                     setIsShotsBulkEditing(false);
@@ -892,7 +1200,8 @@ export default function ScriptPage() {
                               Shot {shot.shot_number}
                             </div>
                             <span className="text-slate-400 font-normal shrink min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-sm">
-                              ({shot.duration}s, {shot.resolution})
+                              ({shot.duration}s, {shot.resolution},{' '}
+                              {shot.aspectRatio || '16:9'})
                             </span>
                             <div className="shrink-0 flex items-center ml-2">
                               {shot.status === 'generating' && (
@@ -913,11 +1222,16 @@ export default function ScriptPage() {
                               )}
                             </div>
                           </div>
-                          {!isExpanded && shot.prompt && (
-                            <div className="text-sm text-slate-400 truncate mt-0.5 w-full">
-                              {shot.prompt}
-                            </div>
-                          )}
+                          {!isExpanded &&
+                            (shot.prompt ||
+                              initialData.PODCAST_SHOTS[index]?.prompt) && (
+                              <div
+                                className={`text-sm truncate mt-0.5 w-full ${shot.prompt ? 'text-slate-400' : 'text-slate-300 italic'}`}
+                              >
+                                {shot.prompt ||
+                                  initialData.PODCAST_SHOTS[index]?.prompt}
+                              </div>
+                            )}
                         </div>
                         <div className="flex items-center gap-3 ml-auto shrink-0 pl-2 self-start mt-0.5">
                           <button
@@ -939,13 +1253,13 @@ export default function ScriptPage() {
                       {/* Accordion Content */}
                       {isExpanded && (
                         <div className="p-4 border-t border-slate-100 space-y-4 bg-slate-50/50">
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4 w-full box-border">
+                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-4 w-full box-border">
                             <div className="min-w-0">
                               <label className="field-label break-words">
                                 Duration (s)
                               </label>
                               <div className="grid grid-cols-2 gap-2 w-full box-border">
-                                {[4, 8].map((dur) => (
+                                {[4, 8, 10].map((dur) => (
                                   <button
                                     key={dur}
                                     onClick={() =>
@@ -981,6 +1295,28 @@ export default function ScriptPage() {
                                     }`}
                                   >
                                     {res}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                            <div className="min-w-0">
+                              <label className="field-label break-words">
+                                Aspect Ratio
+                              </label>
+                              <div className="grid grid-cols-3 gap-2 w-full box-border">
+                                {['16:9', '9:16', '1:1'].map((ratio) => (
+                                  <button
+                                    key={ratio}
+                                    onClick={() =>
+                                      updateShot(index, { aspectRatio: ratio })
+                                    }
+                                    className={`flex-1 h-12 rounded-lg text-base font-medium transition-colors ${
+                                      (shot.aspectRatio || '16:9') === ratio
+                                        ? 'bg-violet-100 text-violet-700 border-2 border-violet-500'
+                                        : 'bg-white text-slate-600 border border-slate-200 hover:border-violet-300 hover:bg-violet-50'
+                                    }`}
+                                  >
+                                    {ratio}
                                   </button>
                                 ))}
                               </div>
@@ -1061,7 +1397,12 @@ export default function ScriptPage() {
                                 updateShot(index, { prompt: val })
                               }
                               globals={globals}
-                              placeholder="Write your prompt here. Type { to reference a variable."
+                              placeholder={
+                                initialData.PODCAST_SHOTS[
+                                  index
+                                ]?.prompt?.trim() ||
+                                'Describe your shot here...'
+                              }
                             />
                             {/* Detected Variables Panel */}
                             {(() => {
@@ -1328,6 +1669,30 @@ export default function ScriptPage() {
                     </span>
                   </div>
                 )}
+                {(model === 'kling-o3-image-to-video' ||
+                  model === 'grok-imagine-image-to-video-beta' ||
+                  model === 'seedance-1.5-pro') && (
+                  <div className="mb-2 flex items-start gap-2 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-700">
+                    <span className="shrink-0 mt-0.5">ℹ</span>
+                    <span>
+                      {model === 'grok-imagine-image-to-video-beta'
+                        ? 'Grok requires at least 1 image per shot.'
+                        : model === 'seedance-1.5-pro'
+                          ? 'Seedance 1.5 Pro requires at least 1 image per shot.'
+                          : 'Kling O3 requires at least 1 image per shot. Only the first image is used as the start frame.'}
+                    </span>
+                  </div>
+                )}
+                {model === 'seedance-2.0-reference-to-video' && (
+                  <div className="mb-2 flex items-start gap-2 rounded-lg bg-blue-50 border border-blue-200 px-3 py-2 text-xs text-blue-700">
+                    <span className="shrink-0 mt-0.5">ℹ</span>
+                    <span>
+                      Seedance 2.0 will use an image reference if attached,
+                      otherwise it will fall back to text-to-video
+                      automatically.
+                    </span>
+                  </div>
+                )}
                 <label className="field-label">Model</label>
                 <select
                   value={model}
@@ -1340,6 +1705,16 @@ export default function ScriptPage() {
                   <option value="veo-3.1-generate-preview">Veo 3.1 Pro</option>
                   <option value="veo-3.1-lite-generate-preview">
                     Veo 3.1 Lite
+                  </option>
+                  <option value="kling-o3-image-to-video">
+                    Kling O3 (Evolink)
+                  </option>
+                  <option value="seedance-2.0-reference-to-video">
+                    Seedance 2.0
+                  </option>
+                  <option value="seedance-1.5-pro">Seedance 1.5 Pro</option>
+                  <option value="grok-imagine-image-to-video-beta">
+                    Grok (Beta)
                   </option>
                 </select>
               </div>
@@ -1354,7 +1729,14 @@ export default function ScriptPage() {
 
                     if (selectedIndices.length === 0)
                       return alert('Select at least one shot.');
-                    if (!apiKey) return alert('Please enter your API key.');
+                    if (
+                      !apiKey &&
+                      model !== 'kling-o3-image-to-video' &&
+                      model !== 'seedance-2.0-reference-to-video' &&
+                      model !== 'grok-imagine-image-to-video-beta' &&
+                      model !== 'seedance-1.5-pro'
+                    )
+                      return alert('Please enter your API key.');
 
                     setIsGenerating(true);
                     const controller = new AbortController();
@@ -1371,7 +1753,10 @@ export default function ScriptPage() {
                       selectedIndices.map(async (i) => {
                         const shot = shots[i];
                         try {
-                          let finalPrompt = shot.prompt;
+                          let finalPrompt =
+                            shot.prompt ||
+                            initialData.PODCAST_SHOTS[i]?.prompt ||
+                            '';
                           globals.forEach((g) => {
                             finalPrompt = finalPrompt.replace(
                               new RegExp(`\\{${g.name}\\}`, 'g'),
@@ -1399,8 +1784,14 @@ export default function ScriptPage() {
                           // Choose route based on model + image count
                           // Lite: max 1 image via image-direct; no refs support
                           // Fast/Pro: 0 → text, 1 → image-direct, 2-3 → image-refs
+                          // Kling O3: always image-direct (first image as start frame)
                           const isLite =
                             model === 'veo-3.1-lite-generate-preview';
+                          const isKling =
+                            model === 'kling-o3-image-to-video' ||
+                            model === 'seedance-2.0-reference-to-video' ||
+                            model === 'grok-imagine-image-to-video-beta' ||
+                            model === 'seedance-1.5-pro';
                           let route: string;
                           let body: Record<string, unknown>;
                           const base = {
@@ -1413,7 +1804,46 @@ export default function ScriptPage() {
                             existingCount: shot.generatedVideoUrls?.length ?? 0,
                           };
 
-                          if (resolvedImages.length === 0) {
+                          if (isKling) {
+                            const klingImages = shot.imageRefs
+                              .map((id) => images.find((img) => img.id === id))
+                              .filter(Boolean);
+
+                            let actualModel = model;
+                            if (klingImages.length === 0) {
+                              if (model === 'seedance-2.0-reference-to-video') {
+                                actualModel = 'seedance-2.0-text-to-video';
+                              } else {
+                                throw new Error(
+                                  'Model requires at least one image attached to this shot.'
+                                );
+                              }
+                            }
+
+                            if (
+                              klingImages.length > 0 &&
+                              klingImages.some((img) => !img?.blobUrl)
+                            )
+                              throw new Error(
+                                'Some images are still uploading — please wait a moment and try again.'
+                              );
+
+                            route = '/api/script/generate-video/evolink';
+                            body = {
+                              prompt: finalPrompt,
+                              model: actualModel,
+                              duration: shot.duration,
+                              shotNumber: shot.shot_number,
+                              existingCount:
+                                shot.generatedVideoUrls?.length ?? 0,
+                              imageUrls:
+                                klingImages.length > 0
+                                  ? klingImages.map((img) => img!.blobUrl)
+                                  : [],
+                              quality: shot.resolution,
+                              aspect_ratio: shot.aspectRatio || '16:9',
+                            };
+                          } else if (resolvedImages.length === 0) {
                             route = '/api/script/generate-video/text';
                             body = base;
                           } else if (isLite) {
@@ -1453,7 +1883,11 @@ export default function ScriptPage() {
                               res.headers.get('x-video-filename') ||
                               `shot_${shot.shot_number}.mp4`;
                             try {
-                              await saveGeneratedVideo(filename, blob);
+                              await saveGeneratedVideo(
+                                activeThreadId,
+                                filename,
+                                blob
+                              );
                               console.log(
                                 `[generate-video] saved to IndexedDB as ${filename}`
                               );
@@ -1910,7 +2344,7 @@ export default function ScriptPage() {
                   }
                   setGlobals(newGlobals);
                   localStorage.setItem(
-                    'podcast_globals',
+                    `thread_${activeThreadId}_globals`,
                     JSON.stringify(newGlobals)
                   );
                   setEditingVarIndex(null);
@@ -1946,7 +2380,10 @@ export default function ScriptPage() {
         message="Are you sure you want to delete all variables?"
         onConfirm={() => {
           setGlobals([]);
-          localStorage.setItem('podcast_globals', JSON.stringify([]));
+          localStorage.setItem(
+            `thread_${activeThreadId}_globals`,
+            JSON.stringify([])
+          );
           setIsDeletingAllVars(false);
         }}
         onCancel={() => setIsDeletingAllVars(false)}
@@ -1961,7 +2398,10 @@ export default function ScriptPage() {
             const newG = [...globals];
             newG.splice(varToDelete, 1);
             setGlobals(newG);
-            localStorage.setItem('podcast_globals', JSON.stringify(newG));
+            localStorage.setItem(
+              `thread_${activeThreadId}_globals`,
+              JSON.stringify(newG)
+            );
             setVarToDelete(null);
           }
         }}
@@ -1974,9 +2414,16 @@ export default function ScriptPage() {
         message="Are you sure you want to permanently delete this image from your library?"
         onConfirm={() => {
           if (imageToDelete) {
+            const imgToDelete = images.find((img) => img.id === imageToDelete);
             deleteLibraryImage(imageToDelete).catch(() => {});
+            if (imgToDelete?.blobUrl) {
+              fetch('/api/images', {
+                method: 'DELETE',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ url: imgToDelete.blobUrl }),
+              }).catch(() => {});
+            }
             setImages((prev) => prev.filter((img) => img.id !== imageToDelete));
-            // Also optionally remove from shot attachments
             setShots((prev) =>
               prev.map((s) => ({
                 ...s,
@@ -1998,7 +2445,8 @@ export default function ScriptPage() {
             const { shotIndex, url } = videoToDelete;
             // Remove from IndexedDB — extract filename from blob URL or path
             const filename = url.split('/').pop();
-            if (filename) deleteGeneratedVideo(filename).catch(() => {});
+            if (filename)
+              deleteGeneratedVideo(activeThreadId, filename).catch(() => {});
 
             setShots((prev) => {
               const newShots = [...prev];

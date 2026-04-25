@@ -65,6 +65,10 @@ const NAV = [
 export default function AppSidebar() {
   const pathname = usePathname();
 
+  if (pathname === '/login' || pathname === '/signup') {
+    return null;
+  }
+
   return (
     <aside className="flex w-16 flex-shrink-0 flex-col items-center border-r border-slate-200 bg-white pt-4 pb-[max(24px,env(safe-area-inset-bottom))] gap-1 relative">
       {/* Logo mark */}

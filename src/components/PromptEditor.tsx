@@ -129,6 +129,10 @@ export default function PromptEditor({
 
   // Render highlighted text
   const renderHighlightedText = () => {
+    if (!value && placeholder) {
+      return <span className="text-slate-400 opacity-60">{placeholder}</span>;
+    }
+
     const renderPart = (text: string, startIndex: number) => {
       // Regex matches {variableName}
       const regex = /(\{[a-zA-Z0-9_-]+\})/g;
@@ -205,7 +209,7 @@ export default function PromptEditor({
         onKeyDown={handleKeyDown}
         placeholder={placeholder}
         spellCheck={false}
-        className="absolute inset-0 w-full h-full p-3 text-sm font-sans whitespace-pre-wrap break-words bg-transparent text-transparent caret-slate-900 border border-transparent rounded-lg resize-none focus:outline-none focus:ring-0 z-10 m-0 overflow-y-auto"
+        className="absolute inset-0 w-full h-full p-3 text-sm font-sans whitespace-pre-wrap break-words bg-transparent text-transparent placeholder:text-slate-400 caret-slate-900 border border-transparent rounded-lg resize-none focus:outline-none focus:ring-0 z-10 m-0 overflow-y-auto"
         style={{
           color: 'transparent',
         }}

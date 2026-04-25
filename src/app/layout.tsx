@@ -2,6 +2,8 @@ import React from 'react';
 import type { Metadata } from 'next';
 import { Geist, Geist_Mono } from 'next/font/google';
 import AppSidebar from '@/components/AppSidebar';
+import { AuthProvider } from '@/lib/AuthContext';
+import AuthGuard from '@/components/AuthGuard';
 import './globals.css';
 
 const geistSans = Geist({
@@ -29,10 +31,14 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased flex h-screen overflow-hidden`}
       >
-        <AppSidebar />
-        <main className="flex-1 min-w-0 overflow-x-hidden overflow-y-auto">
-          {children}
-        </main>
+        <AuthProvider>
+          <AuthGuard>
+            <AppSidebar />
+            <main className="flex-1 min-w-0 overflow-x-hidden overflow-y-auto">
+              {children}
+            </main>
+          </AuthGuard>
+        </AuthProvider>
       </body>
     </html>
   );

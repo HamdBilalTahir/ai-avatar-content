@@ -1,3 +1,139 @@
+## 🗓️ **2026-04-25**
+
+---
+
+### ✨ Features
+
+---
+
+> ### Vercel Blob Integration & Firestore Schema Migration
+>
+> - **What changed:** Replaced IndexedDB and `localStorage` media with centralized Vercel Blob storage. Added `POST /api/upload` to handle chunked/streamed uploads to `@vercel/blob`. Executed a one-time migration to move all existing `script_threads`, shots, global variables, and generated video links into the formalised Firestore schema (`scripts`, `scripts/{id}/shots`, `scripts/{id}/globals`, `generatedVideos`, `imageLibraries`). The script fetched local blobs via IndexedDB URLs, uploaded them to Vercel Blob (under `generated-videos/`), and saved the persistent URLs to Firestore with proper relational keys.
+> - **Why:** Local blob URLs are ephemeral and don't persist across devices. Moving data to Vercel Blob and Firestore ensures content is permanently accessible and correctly mapped to user profiles as defined in the ER diagram.
+> - **Files:**
+>   - `src/app/api/upload/route.ts` _(new)_
+>   - `src/lib/types.ts`
+>   - `src/app/migrate-data/page.tsx` _(created & removed)_
+
+---
+
+### 💅 Styling and UI Improvements
+
+---
+
+> ### Script Threads — UI Enhancements
+>
+> - **What changed:** Added a "Create New" button adjacent to the "Video Script Editor" title for quick thread creation. Added an explicit edit (✎) button next to each script thread in the sidebar to make renaming more discoverable. Fixed an issue where the Prompt Editor placeholder text was indented due to leading whitespace. The first shot now loads as the only shot by default when creating a new thread, using the other shots' data as placeholder text.
+> - **Why:** Improves usability and discoverability of thread management features while ensuring a cleaner, aligned UI in the prompt editor.
+> - **Files:**
+>   - `src/app/script/page.tsx`
+>   - `src/components/PromptEditor.tsx`
+
+---
+
+### ✨ Features
+
+---
+
+> ### Script Threads — Multiple Scripts in a Left Panel
+>
+> - **What changed:** The Script page now supports multiple script threads in a collapsible left panel. Each thread has its own shot list, globals, and generated video history. The image library is shared across all threads. Threads are stored in `localStorage` under `script_threads` (array of `{ id, name, createdAt }`). The active thread persists via `active_thread_id`. Shots and globals are stored under `thread_${id}_shots` / `thread_${id}_globals`. Clicking a thread switches to it (persisting the current one first). Double-clicking renames inline. Hovering shows a delete button. A `+` button in the panel header creates a new thread at the top of the list. On first load, existing `podcast_shots` / `podcast_globals` data is migrated into a default thread whose name is inferred from the first descriptive line in the first few shots.
+> - **Why:** Allows managing multiple video scripts without losing prior work — each shoot or content batch lives in its own thread while sharing the image library.
+> - **Files:**
+>   - `src/app/script/page.tsx`
+
+---
+
+> ### Evolink / Kling O3 — Image-to-Video Model Added
+>
+> - **What changed:** Added `kling-o3-image-to-video` (and additional Evolink models: `seedance-2.0-reference-to-video`, `grok-imagine-image-to-video-beta`, `seedance-1.5-pro`) to the model dropdown on the Script page. These route to a new `POST /api/script/generate-video/evolink` route that submits a job to the Evolink API (`api.evolink.ai/v1/videos/generations`), polls `GET /v1/tasks/${jobId}` every 8 s (up to 70 attempts, ~9 min), downloads the completed video, and returns the binary MP4 with an `X-Video-Filename` header. Full structured logging matches the Veo routes.
+> - **Why:** Expands model selection beyond Google Veo to include Kling-based models via the Evolink aggregator, enabling image-driven video generation.
+> - **Files:**
+>   - `src/app/api/script/generate-video/evolink/route.ts` _(new)_
+>   - `src/app/script/page.tsx`
+
+---
+
+> ### Image Library — Vercel Blob Persistence for Public URLs
+>
+> - **What changed:** Uploaded images are now also stored in Vercel Blob (`@vercel/blob`, `access: 'public'`) via `POST /api/images`. The returned public URL is saved alongside the IndexedDB blob as `blobUrl` on each `ImageItem`. Deleting an image calls `DELETE /api/images` to remove the blob from Vercel storage. The `/api/images` route is now blob-only (no Firestore).
+> - **Why:** Kling/Evolink models require a publicly accessible image URL (`image_urls`). Vercel Blob provides a permanent public URL that the Evolink API can fetch directly, removing the need to base64-encode images or proxy them through the app server.
+> - **Files:**
+>   - `src/app/api/images/route.ts` _(rewritten)_
+>   - `src/lib/imageLibraryDb.ts`
+>   - `src/app/script/page.tsx`
+
+---
+
+> ### Telegram Notification Bot — Idea Approval Messages
+>
+> - **What changed:** New `POST /api/telegram/notify` route sends a formatted Telegram message to a configured group containing up to 3 pending post ideas (headline, hook, category) from Firestore `post_ideas`. After sending, the `message_id` and associated idea IDs are stored in Firestore `telegram_messages` for later processing. Auth is gated behind `CRON_SECRET`. Message text uses Telegram MarkdownV2 with proper escaping.
+> - **Why:** Enables a human-in-the-loop approval step — ideas generated by the pipeline are pushed to a Telegram group where they can be reviewed before publishing.
+> - **Files:**
+>   - `src/app/api/telegram/notify/route.ts` _(new)_
+
+---
+
+> ### Automated Pipeline — OpenAI GPT-4o for Idea Generation
+>
+> - **What changed:** The `POST /api/pipeline/generate-ideas` route now uses the OpenAI Chat Completions API (`gpt-4o`) instead of Anthropic Claude. Auth uses `Authorization: Bearer ${OPENAI_API_KEY}` and the response is read from `data.choices[0].message.content`.
+> - **Why:** Standardises on the OpenAI API key already present in the environment.
+> - **Files:**
+>   - `src/app/api/pipeline/generate-ideas/route.ts`
+
+---
+
+> ### Automated Pipeline — CRON-Only Chaining
+>
+> - **What changed:** Added an `isCronRequest` boolean to both `POST /api/pipeline/scrape` and `POST /api/pipeline/generate-ideas`. Each route only fires the next step in the chain (scrape → generate-ideas → Telegram notify) when the request is authenticated with `CRON_SECRET`. Manual API calls execute the route's own logic without triggering downstream routes.
+> - **Why:** Prevents manual test calls from accidentally kicking off the full automated pipeline chain.
+> - **Files:**
+>   - `src/app/api/pipeline/scrape/route.ts`
+>   - `src/app/api/pipeline/generate-ideas/route.ts`
+
+---
+
+### 🐛 Fixes
+
+---
+
+> ### Generated Videos — Thread-Scoped IndexedDB Keys & Migration
+>
+> - **What changed:** IndexedDB video keys are now scoped per thread: `${threadId}:${filename}`. A one-time `migrateVideosToThread(threadId)` function re-keys any existing bare-filename records (from before threads were introduced) to the thread-prefixed format. The migration runs idempotently at startup — if no bare-key records exist it is a no-op.
+> - **Why:** Without scoping, all threads shared the same video pool. Scoped keys ensure each thread's generated media is isolated.
+> - **Files:**
+>   - `src/lib/generatedVideosDb.ts`
+>   - `src/app/script/page.tsx`
+
+---
+
+> ### Generated Videos — Race Condition on First Load Fixed
+>
+> - **What changed:** Shot loading (and therefore `loadGeneratedVideosByThread`) is now chained as `.then()` on `migrateVideosToThread` rather than running concurrently with it. Both `migrateVideosToThread` and the old `loadGeneratedVideosByThread` call opened readonly IndexedDB transactions at the same time — on first load the readonly transaction could read before migration's readwrite transaction had re-keyed the bare records, returning an empty result.
+> - **Why:** Videos were visible in IndexedDB with correct thread-scoped keys but showed as "0 videos" in the Generated Media panel on the first load after the threads feature was introduced.
+> - **Files:**
+>   - `src/app/script/page.tsx`
+
+---
+
+> ### Generated Videos — Stale Blob URLs Cleared on Restore
+>
+> - **What changed:** `restoreThreadShots` no longer keeps `blob:` URLs from localStorage when restoring shots. All `generatedVideoUrls` are cleared on restore — IndexedDB repopulates fresh `blob:` URLs via `loadGeneratedVideosByThread`.
+> - **Why:** `blob:` URLs created with `URL.createObjectURL` expire when the page unloads. Keeping dead blob: URLs in restored shot state prevented the fresh IndexedDB-sourced URLs from being the source of truth, causing videos to appear broken or absent after reload.
+> - **Files:**
+>   - `src/app/script/page.tsx`
+
+---
+
+> ### Telegram Notify — Fixed Wrong Path in generate-ideas Chain
+>
+> - **What changed:** Corrected the chained POST URL in `generate-ideas` from `/api/pipeline/notify` to `/api/telegram/notify`.
+> - **Why:** The route was calling a non-existent path, silently failing to send Telegram notifications at the end of the automated pipeline.
+> - **Files:**
+>   - `src/app/api/pipeline/generate-ideas/route.ts`
+
+---
+
 ## 🗓️ **2026-04-10**
 
 ---
