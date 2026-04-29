@@ -1,9 +1,11 @@
 import React from 'react';
 import type { Metadata } from 'next';
-import { Geist, Geist_Mono } from 'next/font/google';
+import { Geist, Geist_Mono, Space_Grotesk } from 'next/font/google';
 import AppSidebar from '@/components/AppSidebar';
 import { AuthProvider } from '@/lib/AuthContext';
+import { ProviderConfigProvider } from '@/lib/ProviderContext';
 import AuthGuard from '@/components/AuthGuard';
+import { SidebarProvider, SidebarInset } from '@/components/ui/sidebar';
 import './globals.css';
 
 const geistSans = Geist({
@@ -13,6 +15,11 @@ const geistSans = Geist({
 
 const geistMono = Geist_Mono({
   variable: '--font-geist-mono',
+  subsets: ['latin'],
+});
+
+const spaceGrotesk = Space_Grotesk({
+  variable: '--font-heading',
   subsets: ['latin'],
 });
 
@@ -29,15 +36,19 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased flex h-screen overflow-hidden`}
+        className={`${geistSans.variable} ${geistMono.variable} ${spaceGrotesk.variable} antialiased flex h-screen overflow-hidden bg-[#F9FAFB] font-sans`}
       >
         <AuthProvider>
-          <AuthGuard>
-            <AppSidebar />
-            <main className="flex-1 min-w-0 overflow-x-hidden overflow-y-auto">
-              {children}
-            </main>
-          </AuthGuard>
+          <ProviderConfigProvider>
+            <AuthGuard>
+              <SidebarProvider>
+                <AppSidebar />
+                <SidebarInset className="flex-1 min-w-0 flex flex-col overflow-x-hidden overflow-y-auto page-transition">
+                  {children}
+                </SidebarInset>
+              </SidebarProvider>
+            </AuthGuard>
+          </ProviderConfigProvider>
         </AuthProvider>
       </body>
     </html>

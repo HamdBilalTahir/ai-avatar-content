@@ -12,12 +12,16 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (!loading) {
-      if (!user && pathname !== '/login' && pathname !== '/signup') {
+      const isAuthRoute =
+        pathname === '/login' ||
+        pathname === '/signup' ||
+        pathname === '/forgot-password';
+      if (!user && !isAuthRoute) {
         const currentPath =
           pathname +
           (searchParams.toString() ? `?${searchParams.toString()}` : '');
         router.push(`/login?returnUrl=${encodeURIComponent(currentPath)}`);
-      } else if (user && (pathname === '/login' || pathname === '/signup')) {
+      } else if (user && isAuthRoute) {
         const returnUrl = searchParams.get('returnUrl') || '/';
         router.push(returnUrl);
       }
@@ -35,7 +39,11 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
   // We still render children if loading is false.
   // If not authenticated and on a protected route, useEffect will trigger a redirect,
   // but we should avoid rendering protected content briefly.
-  if (!user && pathname !== '/login' && pathname !== '/signup') {
+  const isAuthRoute =
+    pathname === '/login' ||
+    pathname === '/signup' ||
+    pathname === '/forgot-password';
+  if (!user && !isAuthRoute) {
     return null;
   }
 

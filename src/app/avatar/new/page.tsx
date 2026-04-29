@@ -5,6 +5,9 @@ import { useRouter } from 'next/navigation';
 import DeviceAwareUpload from '@/components/DeviceAwareUpload';
 import NextImage from 'next/image';
 import type { PipelineCreateRequest, ReferenceImage } from '@/lib/types';
+import TopHeader from '@/components/TopHeader';
+import { Button } from '@/components/ui/button';
+import { useProvider } from '@/lib/ProviderContext';
 
 const VOICE_PRESETS = [
   {
@@ -22,21 +25,19 @@ const VOICE_PRESETS = [
   },
 ] as const;
 
-const EMOTION_OPTIONS = [
-  'neutral',
-  'excited',
-  'enthusiastic',
-  'confident',
-  'happy',
-  'curious',
-  'calm',
-  'determined',
-  'proud',
-  'surprised',
-  'anxious',
-  'sad',
-] as const;
-type Emotion = (typeof EMOTION_OPTIONS)[number];
+type Emotion =
+  | 'neutral'
+  | 'excited'
+  | 'enthusiastic'
+  | 'confident'
+  | 'happy'
+  | 'curious'
+  | 'calm'
+  | 'determined'
+  | 'proud'
+  | 'surprised'
+  | 'anxious'
+  | 'sad';
 
 const CYCLING_MESSAGES = [
   'Crafting your avatar…',
@@ -45,38 +46,60 @@ const CYCLING_MESSAGES = [
   'Bringing your avatar to life…',
 ];
 
-const DRAFT_KEY = 'ai-avatar-draft';
-const DRAFT_IMAGE_KEY = 'ai-avatar-draft-image';
+const PROMPT_CHIPS = [
+  'Professional corporate headshot',
+  'Casual tech worker in modern office',
+  'Cinematic studio lighting, 85mm lens',
+  'Warm lighting, friendly smile',
+  'Urban street background, depth of field',
+];
+
+type AvatarVersion = {
+  id: string;
+  base64: string;
+  mimeType: string;
+  timestamp: number;
+};
 
 export default function AvatarNewPage() {
   const router = useRouter();
+  const { providerConfig } = useProvider();
 
-  const [geminiApiKey, setGeminiApiKey] = useState('');
-  const [isApiKeyPopupOpen, setIsApiKeyPopupOpen] = useState(false);
-  const [tempApiKey, setTempApiKey] = useState('');
+  const geminiApiKey = providerConfig.geminiApiKey || '';
+
+  const [showOnboarding, setShowOnboarding] = useState(false);
+  const [onboardingSlide, setOnboardingSlide] = useState(0);
+
+  useEffect(() => {
+    const hasSeen = localStorage.getItem('hasSeenOnboarding');
+    if (!hasSeen) {
+      setShowOnboarding(true);
+    }
+  }, []);
+
+  const completeOnboarding = () => {
+    localStorage.setItem('hasSeenOnboarding', 'true');
+    setShowOnboarding(false);
+  };
 
   const [avatarPrompt, setAvatarPrompt] = useState('');
   const [topic, setTopic] = useState('');
   const [userScript, setUserScript] = useState('');
-  const [imageBase64, setImageBase64] = useState<string | null>(null);
-  const [mimeType, setMimeType] = useState<string | null>(null);
   const [referenceImages, setReferenceImages] = useState<ReferenceImage[]>([]);
   const [negativePrompt, setNegativePrompt] = useState('');
   const [showNegativePrompt, setShowNegativePrompt] = useState(false);
+
+  // Generation & Preview
+  const [versions, setVersions] = useState<AvatarVersion[]>([]);
+  const [currentVersionIndex, setCurrentVersionIndex] = useState(-1);
   const [isGeneratingAvatar, setIsGeneratingAvatar] = useState(false);
   const [isStartingPipeline, setIsStartingPipeline] = useState(false);
-  const [generationCount, setGenerationCount] = useState(0);
   const [avatarError, setAvatarError] = useState<string | null>(null);
   const [pipelineError, setPipelineError] = useState<string | null>(null);
   const [cyclingMessage, setCyclingMessage] = useState(CYCLING_MESSAGES[0]);
-  const [imageVisible, setImageVisible] = useState(false);
-  const [imageAspectRatio, setImageAspectRatio] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
-  const [isKeyCopied, setIsKeyCopied] = useState(false);
   const [lightboxOpen, setLightboxOpen] = useState(false);
 
-  const imageContainerRef = useRef<HTMLDivElement>(null);
-
+  // Voice Settings
   const [selectedVoiceId, setSelectedVoiceId] = useState<string>(
     VOICE_PRESETS[0].id
   );
@@ -103,116 +126,10 @@ export default function AvatarNewPage() {
   const cycleRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const successTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // ── Restore draft from localStorage on mount ───────────────────────────────
+  // Keep AI topic field in sync with the topic textarea
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem(DRAFT_KEY);
-      if (raw) {
-        const d = JSON.parse(raw) as Record<string, unknown>;
-        if (d.avatarPrompt) setAvatarPrompt(d.avatarPrompt as string);
-        if (d.topic) setTopic(d.topic as string);
-        if (d.userScript) setUserScript(d.userScript as string);
-        if (d.mimeType) setMimeType(d.mimeType as string);
-        if (d.generationCount) setGenerationCount(d.generationCount as number);
-        if (d.selectedVoiceId) setSelectedVoiceId(d.selectedVoiceId as string);
-        if (d.customVoiceId) setCustomVoiceId(d.customVoiceId as string);
-        if (d.voiceStyleMode)
-          setVoiceStyleMode(d.voiceStyleMode as 'auto' | 'manual');
-        if (d.manualEmotion) setManualEmotion(d.manualEmotion as Emotion);
-        if (d.manualSpeed) setManualSpeed(d.manualSpeed as number);
-        if (d.manualVolume) setManualVolume(d.manualVolume as number);
-        if (d.scriptMode) setScriptMode(d.scriptMode as 'manual' | 'ai');
-        if (d.aiDuration)
-          setAiDuration(d.aiDuration as '15s' | '30s' | '45s' | '60s');
-        if (d.negativePrompt) setNegativePrompt(d.negativePrompt as string);
-        if (d.showNegativePrompt)
-          setShowNegativePrompt(d.showNegativePrompt as boolean);
-      }
-      const savedImage = localStorage.getItem(DRAFT_IMAGE_KEY);
-      if (savedImage) {
-        const img = JSON.parse(savedImage) as {
-          imageBase64: string;
-          mimeType: string;
-        };
-        setImageBase64(img.imageBase64);
-        setMimeType(img.mimeType);
-      }
-
-      const savedApiKey = localStorage.getItem('gemini_api_key');
-      if (savedApiKey) {
-        setGeminiApiKey(savedApiKey);
-      }
-    } catch {
-      // Corrupt storage — ignore and start fresh
-    }
-  }, []);
-
-  useEffect(() => {
-    if (imageBase64 && generationCount > 0 && window.innerWidth < 768) {
-      setTimeout(() => {
-        imageContainerRef.current?.scrollIntoView({
-          behavior: 'smooth',
-          block: 'start',
-        });
-      }, 100);
-    }
-  }, [imageBase64, generationCount]);
-
-  // ── Persist draft to localStorage whenever state changes ───────────────────
-  useEffect(() => {
-    try {
-      localStorage.setItem(
-        DRAFT_KEY,
-        JSON.stringify({
-          avatarPrompt,
-          topic,
-          userScript,
-          mimeType,
-          generationCount,
-          selectedVoiceId,
-          customVoiceId,
-          voiceStyleMode,
-          manualEmotion,
-          manualSpeed,
-          manualVolume,
-          scriptMode,
-          aiDuration,
-          negativePrompt,
-          showNegativePrompt,
-        })
-      );
-    } catch {
-      /* storage full — skip */
-    }
-  }, [
-    avatarPrompt,
-    topic,
-    userScript,
-    mimeType,
-    generationCount,
-    selectedVoiceId,
-    customVoiceId,
-    voiceStyleMode,
-    manualEmotion,
-    manualSpeed,
-    manualVolume,
-    scriptMode,
-    aiDuration,
-    negativePrompt,
-    showNegativePrompt,
-  ]);
-
-  useEffect(() => {
-    if (!imageBase64 || !mimeType) return;
-    try {
-      localStorage.setItem(
-        DRAFT_IMAGE_KEY,
-        JSON.stringify({ imageBase64, mimeType })
-      );
-    } catch {
-      /* image too large for quota — skip silently */
-    }
-  }, [imageBase64, mimeType]);
+    setAiTopic(topic);
+  }, [topic]);
 
   useEffect(() => {
     if (isGeneratingAvatar) {
@@ -230,18 +147,7 @@ export default function AvatarNewPage() {
     };
   }, [isGeneratingAvatar]);
 
-  // Keep AI topic field in sync with the topic textarea above
-  useEffect(() => {
-    setAiTopic(topic);
-  }, [topic]);
-
   async function handleGenerateScript() {
-    if (!geminiApiKey.trim()) {
-      setScriptGenerateError(
-        'Please enter a Gemini API Key first (top of page).'
-      );
-      return;
-    }
     if (!aiTopic.trim()) return;
     setScriptGenerateError(null);
     setIsGeneratingScript(true);
@@ -293,30 +199,9 @@ export default function AvatarNewPage() {
     setReferenceImages((prev) => prev.filter((_, i) => i !== index));
   }
 
-  function handlePushToLibrary() {
-    if (!imageBase64 || !mimeType) return;
-    const existing = localStorage.getItem('avatar_image_library');
-    const library = existing ? JSON.parse(existing) : [];
-    library.push({
-      id: Date.now().toString(),
-      data: imageBase64,
-      mime_type: mimeType,
-      timestamp: Date.now(),
-    });
-    localStorage.setItem('avatar_image_library', JSON.stringify(library));
-    alert('Successfully pushed to Image Library!');
-  }
-
-  async function handleGenerate() {
-    if (!geminiApiKey.trim()) {
-      setAvatarError('Please enter a Gemini API Key first.');
-      return;
-    }
+  async function handleGenerateAvatar() {
     if (!avatarPrompt.trim()) return;
     setAvatarError(null);
-    setImageBase64(null);
-    setImageVisible(false);
-    setImageAspectRatio(null);
     setIsGeneratingAvatar(true);
 
     try {
@@ -340,7 +225,6 @@ export default function AvatarNewPage() {
         throw new Error(data.error ?? 'Avatar generation failed');
       }
 
-      // Read SSE stream — pings keep connection alive, result/error are final events
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
@@ -362,13 +246,17 @@ export default function AvatarNewPage() {
           const payload = JSON.parse(dataMatch[1]);
 
           if (event === 'result') {
-            setImageBase64(payload.image_base64);
-            setMimeType(payload.mime_type);
-            setGenerationCount((c) => c + 1);
+            const newVersion: AvatarVersion = {
+              id: Date.now().toString(),
+              base64: payload.image_base64,
+              mimeType: payload.mime_type,
+              timestamp: Date.now(),
+            };
+            setVersions((prev) => [...prev, newVersion]);
+            setCurrentVersionIndex(versions.length);
           } else if (event === 'error') {
             throw new Error(payload.error ?? 'Avatar generation failed');
           }
-          // 'ping' events are ignored — they just keep the connection alive
         }
       }
     } catch (err) {
@@ -379,8 +267,8 @@ export default function AvatarNewPage() {
   }
 
   function handleDownload() {
-    if (!imageBase64 || !mimeType) return;
-    // Always download as PNG regardless of source mime type
+    const current = versions[currentVersionIndex];
+    if (!current) return;
     const canvas = document.createElement('canvas');
     const img = new Image();
     img.onload = () => {
@@ -389,59 +277,18 @@ export default function AvatarNewPage() {
       canvas.getContext('2d')!.drawImage(img, 0, 0);
       const link = document.createElement('a');
       link.href = canvas.toDataURL('image/png');
-      link.download = 'avatar.png';
+      link.download = `avatar-v${currentVersionIndex + 1}.png`;
       link.click();
     };
-    img.src = `data:${mimeType};base64,${imageBase64}`;
-  }
-
-  function handleCopyKey(e: React.MouseEvent) {
-    e.stopPropagation();
-    if (!geminiApiKey) return;
-    navigator.clipboard.writeText(geminiApiKey);
-    setIsKeyCopied(true);
-    setTimeout(() => setIsKeyCopied(false), 1500);
-  }
-
-  function handleCopy() {
-    if (!imageBase64 || !mimeType) return;
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
-    fetch(`data:${mimeType};base64,${imageBase64}`)
-      .then((r) => r.blob())
-      .then(
-        (blob) =>
-          new Promise<Blob>((resolve) => {
-            const canvas = document.createElement('canvas');
-            const img = new Image();
-            img.onload = () => {
-              canvas.width = img.naturalWidth;
-              canvas.height = img.naturalHeight;
-              canvas.getContext('2d')!.drawImage(img, 0, 0);
-              canvas.toBlob((b) => resolve(b!), 'image/png');
-            };
-            img.src = URL.createObjectURL(blob);
-          })
-      )
-      .then((pngBlob) =>
-        navigator.clipboard.write([new ClipboardItem({ 'image/png': pngBlob })])
-      )
-      .catch(() => {});
+    img.src = `data:${current.mimeType};base64,${current.base64}`;
   }
 
   function handleNewSession() {
-    // Clear localStorage drafts
-    localStorage.removeItem(DRAFT_KEY);
-    localStorage.removeItem(DRAFT_IMAGE_KEY);
-    // Reset all state
     setAvatarPrompt('');
     setTopic('');
     setUserScript('');
-    setImageBase64(null);
-    setMimeType(null);
-    setImageVisible(false);
-    setImageAspectRatio(null);
-    setGenerationCount(0);
+    setVersions([]);
+    setCurrentVersionIndex(-1);
     setReferenceImages([]);
     setNegativePrompt('');
     setShowNegativePrompt(false);
@@ -461,11 +308,8 @@ export default function AvatarNewPage() {
   }
 
   async function handleStartPipeline() {
-    if (!geminiApiKey.trim()) {
-      setPipelineError('Please enter a Gemini API Key first (top of page).');
-      return;
-    }
-    if (!imageBase64 || !topic.trim()) return;
+    const current = versions[currentVersionIndex];
+    if (!current || !topic.trim()) return;
     setPipelineError(null);
     setIsStartingPipeline(true);
 
@@ -474,7 +318,7 @@ export default function AvatarNewPage() {
       const body: PipelineCreateRequest & { gemini_api_key?: string } = {
         topic,
         avatar_prompt: avatarPrompt,
-        image_base64: imageBase64,
+        image_base64: current.base64,
         voice_id: resolvedVoice,
         gemini_api_key: geminiApiKey,
         ...(voiceStyleMode === 'manual'
@@ -498,9 +342,6 @@ export default function AvatarNewPage() {
       if (!res.ok) {
         throw new Error(data.error ?? 'Failed to start pipeline');
       }
-
-      localStorage.removeItem(DRAFT_KEY);
-      localStorage.removeItem(DRAFT_IMAGE_KEY);
       router.push(`/pipeline/${data.job_id}`);
     } catch (err) {
       setPipelineError(err instanceof Error ? err.message : String(err));
@@ -508,33 +349,27 @@ export default function AvatarNewPage() {
     }
   }
 
+  const hasAvatar = versions.length > 0 && currentVersionIndex >= 0;
+  const currentAvatar = hasAvatar ? versions[currentVersionIndex] : null;
+
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900">
-      {/* Top nav bar */}
-      <header className="border-b border-slate-200 bg-white/80 backdrop-blur-sm sticky top-0 z-10">
-        <div className="mx-auto max-w-6xl px-6 py-4 flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2">
-            <div className="h-7 w-7 rounded-lg bg-violet-600 flex items-center justify-center">
-              <svg
-                className="h-4 w-4 text-white"
-                viewBox="0 0 24 24"
-                fill="currentColor"
-              >
-                <path d="M12 2a5 5 0 1 1 0 10A5 5 0 0 1 12 2zm0 12c5.33 0 8 2.67 8 4v2H4v-2c0-1.33 2.67-4 8-4z" />
-              </svg>
-            </div>
-            <span className="font-semibold text-slate-800 text-sm tracking-tight">
-              AI Avatar
-            </span>
-          </div>
-          <button
+    <div className="min-h-screen bg-[#F9FAFB] text-foreground flex flex-col">
+      <TopHeader
+        title="Create Your Avatar"
+        description="Craft the perfect presenter for your video."
+        breadcrumbs={[
+          { label: 'Project', href: '#' },
+          { label: 'Script', href: '/script' },
+          { label: 'Avatar' },
+        ]}
+        actions={
+          <Button
+            variant="outline"
             onClick={handleNewSession}
             disabled={isGeneratingAvatar || isStartingPipeline}
-            title="Clear everything and start a fresh generation session"
-            className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 transition hover:border-slate-300 hover:bg-slate-50 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
           >
             <svg
-              className="h-3.5 w-3.5"
+              className="h-3.5 w-3.5 mr-1"
               viewBox="0 0 24 24"
               fill="none"
               stroke="currentColor"
@@ -548,446 +383,229 @@ export default function AvatarNewPage() {
               <path d="M3 3v5h5" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
             New Session
-          </button>
-        </div>
-      </header>
+          </Button>
+        }
+      />
 
-      <div className="mx-auto max-w-6xl px-6 py-10">
-        {/* Page header — full width above both columns */}
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold tracking-tight text-slate-900">
-            Create Your Avatar
-          </h1>
-          <p className="mt-2 text-slate-500 text-base max-w-lg">
-            Describe the person who will present your video. You can regenerate
-            as many times as you like.
-          </p>
-        </div>
-
-        {/* Two-column layout: form left, preview right */}
-        <div className="flex flex-col md:flex-row md:items-start md:gap-8">
-          {/* Left column — form */}
-          <div className="flex-1 min-w-0 flex flex-col gap-5">
-            {/* Prompt card */}
-            <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-              {/* API Key Section */}
-              <div className="mb-4 flex items-center justify-between bg-white border border-slate-200 rounded-lg p-3 shadow-sm">
-                <div className="flex items-center gap-3">
-                  <span className="text-xl leading-none">🔑</span>
-                  <div className="flex flex-col">
-                    <span className="text-[11px] font-semibold text-slate-700 uppercase tracking-wider flex items-center gap-1">
-                      Gemini API Key
-                      {!geminiApiKey && (
-                        <span className="text-red-500 text-sm leading-none">
-                          *
-                        </span>
-                      )}
-                    </span>
-                    <div className="flex items-center gap-1">
-                      <span className="text-[11px] text-slate-500">
-                        {geminiApiKey
-                          ? 'Key is configured'
-                          : 'Required for generation'}
-                      </span>
-                      {geminiApiKey && (
-                        <button
-                          onClick={handleCopyKey}
-                          className="ml-1 text-slate-400 hover:text-slate-600 transition-colors"
-                          title="Copy API Key"
-                        >
-                          {isKeyCopied ? (
-                            <svg
-                              className="w-3 h-3 text-emerald-500"
-                              fill="none"
-                              viewBox="0 0 24 24"
-                              stroke="currentColor"
-                              strokeWidth={3}
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                            >
-                              <polyline points="20 6 9 17 4 12"></polyline>
-                            </svg>
-                          ) : (
-                            <svg
-                              className="w-3 h-3"
-                              fill="none"
-                              viewBox="0 0 24 24"
-                              stroke="currentColor"
-                              strokeWidth={2}
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                            >
-                              <rect
-                                x="9"
-                                y="9"
-                                width="13"
-                                height="13"
-                                rx="2"
-                                ry="2"
-                              ></rect>
-                              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-                            </svg>
-                          )}
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                </div>
-                <button
-                  onClick={() => {
-                    setTempApiKey(geminiApiKey);
-                    setIsApiKeyPopupOpen(true);
-                  }}
-                  className="px-3 py-1.5 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-md text-xs font-medium text-slate-700 transition-colors flex items-center gap-1.5"
-                >
-                  {geminiApiKey ? 'Edit ✏️' : 'Set Key'}
-                </button>
+      <div className="flex-1 w-full flex flex-col lg:flex-row overflow-hidden max-h-[calc(100vh-64px)]">
+        {/* LEFT PANE (60%) - Inputs */}
+        <div className="w-full lg:w-[60%] overflow-y-auto bg-white border-r border-slate-200">
+          <div className="p-6 md:p-8 flex flex-col gap-8 max-w-3xl mx-auto">
+            {/* SECTION 1: DESCRIBE AVATAR */}
+            <section className="flex flex-col gap-4">
+              <div>
+                <h2 className="text-xl font-bold text-slate-800">
+                  1. Describe Avatar
+                </h2>
+                <p className="text-sm text-slate-500 mt-1">
+                  What should your presenter look like?
+                </p>
               </div>
 
-              {isApiKeyPopupOpen && (
-                <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm">
-                  <div className="bg-white rounded-xl shadow-xl w-full max-w-md overflow-hidden flex flex-col">
-                    <div className="p-4 border-b border-slate-100 flex items-center justify-between">
-                      <h3 className="font-bold text-slate-800">
-                        GEMINI API Key
-                      </h3>
-                      <button
-                        onClick={() => setIsApiKeyPopupOpen(false)}
-                        className="text-slate-400 hover:text-slate-600"
-                      >
-                        ×
-                      </button>
-                    </div>
-                    <div className="p-6">
-                      <input
-                        type="password"
-                        value={tempApiKey}
-                        onChange={(e) => setTempApiKey(e.target.value)}
-                        placeholder="Paste your Gemini API key here..."
-                        className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-900 focus:outline-none focus:border-violet-500 focus:ring-1 focus:ring-violet-500 font-mono"
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5 shadow-sm">
+                <label className="block text-sm font-semibold text-slate-700 mb-2">
+                  Avatar Prompt
+                </label>
+                <textarea
+                  rows={4}
+                  value={avatarPrompt}
+                  onChange={(e) => setAvatarPrompt(e.target.value)}
+                  placeholder="e.g. Professional woman in her 30s, confident expression, plain grey background"
+                  className="w-full resize-y rounded-xl border border-slate-200 bg-white px-4 py-3 text-slate-900 placeholder-slate-400 text-sm focus:border-violet-400 focus:outline-none focus:ring-2 focus:ring-violet-100 transition"
+                  disabled={isGeneratingAvatar}
+                />
+
+                {/* Prompt Chips */}
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {PROMPT_CHIPS.map((chip) => (
+                    <button
+                      key={chip}
+                      onClick={() => setAvatarPrompt(chip)}
+                      className="px-3 py-1.5 rounded-full bg-white border border-slate-200 text-xs text-slate-600 hover:border-violet-300 hover:text-violet-700 transition"
+                    >
+                      {chip}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Negative prompt */}
+                <div className="mt-4">
+                  <button
+                    type="button"
+                    onClick={() => setShowNegativePrompt((v) => !v)}
+                    className="flex items-center gap-1.5 text-xs font-medium text-slate-500 hover:text-slate-700 transition"
+                  >
+                    <span
+                      className="inline-block transition-transform duration-200"
+                      style={{
+                        transform: showNegativePrompt
+                          ? 'rotate(90deg)'
+                          : 'rotate(0deg)',
+                      }}
+                    >
+                      ›
+                    </span>
+                    Negative prompt
+                    {negativePrompt.trim() && (
+                      <span className="ml-1 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">
+                        active
+                      </span>
+                    )}
+                  </button>
+
+                  {showNegativePrompt && (
+                    <div className="mt-2 animate-in fade-in slide-in-from-top-2 duration-200">
+                      <textarea
+                        rows={2}
+                        value={negativePrompt}
+                        onChange={(e) => setNegativePrompt(e.target.value)}
+                        placeholder="e.g. glasses, beard, hat, blurry, cartoon"
+                        className="w-full resize-y rounded-xl border border-amber-200 bg-amber-50/50 px-4 py-3 text-slate-900 placeholder-slate-500 text-sm focus:border-amber-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-amber-100 transition"
+                        disabled={isGeneratingAvatar}
                       />
                     </div>
-                    <div className="p-4 border-t border-slate-100 bg-slate-50 flex justify-end gap-2">
-                      <button
-                        onClick={() => setIsApiKeyPopupOpen(false)}
-                        className="px-4 py-2 text-slate-600 hover:text-slate-800 text-sm font-medium transition-colors"
-                      >
-                        Cancel
-                      </button>
-                      <button
-                        onClick={() => {
-                          setGeminiApiKey(tempApiKey);
-                          localStorage.setItem('gemini_api_key', tempApiKey);
-                          setIsApiKeyPopupOpen(false);
-                          if (
-                            tempApiKey.trim() &&
-                            avatarError ===
-                              'Please enter a Gemini API Key first.'
-                          ) {
-                            setAvatarError(null);
-                          }
-                        }}
-                        className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white text-sm font-medium rounded-lg transition-colors shadow-sm"
-                      >
-                        Save
-                      </button>
+                  )}
+                </div>
+
+                {/* Reference images */}
+                <div className="mt-5 border-t border-slate-200/60 pt-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <div>
+                      <span className="text-sm font-semibold text-slate-700">
+                        Reference images
+                      </span>
+                      <span className="ml-1.5 text-xs text-slate-400">
+                        (optional · up to 10)
+                      </span>
                     </div>
-                  </div>
-                </div>
-              )}
-
-              <label className="block text-sm font-semibold text-slate-700 mb-2">
-                Avatar description
-              </label>
-              <textarea
-                rows={4}
-                value={avatarPrompt}
-                onChange={(e) => setAvatarPrompt(e.target.value)}
-                placeholder="e.g. Professional woman in her 30s, confident expression, plain grey background"
-                className="w-full resize-y rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-slate-900 placeholder-slate-400 text-sm focus:border-violet-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-violet-100 transition"
-                disabled={isGeneratingAvatar}
-              />
-              <p className="mt-1.5 text-right text-xs text-slate-400">
-                {avatarPrompt.length} chars
-              </p>
-
-              {/* Negative prompt */}
-              <div className="mt-3">
-                <button
-                  type="button"
-                  onClick={() => setShowNegativePrompt((v) => !v)}
-                  className="flex items-center gap-1.5 text-xs font-medium text-slate-400 hover:text-slate-600 transition"
-                >
-                  <span
-                    className="inline-block transition-transform duration-200"
-                    style={{
-                      transform: showNegativePrompt
-                        ? 'rotate(90deg)'
-                        : 'rotate(0deg)',
-                    }}
-                  >
-                    ›
-                  </span>
-                  Negative prompt
-                  {negativePrompt.trim() && (
-                    <span className="ml-1 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">
-                      active
-                    </span>
-                  )}
-                </button>
-
-                {showNegativePrompt && (
-                  <div
-                    className="mt-2"
-                    style={{ animation: 'fadeSlideIn 0.2s ease both' }}
-                  >
-                    <textarea
-                      rows={2}
-                      value={negativePrompt}
-                      onChange={(e) => setNegativePrompt(e.target.value)}
-                      placeholder="e.g. glasses, beard, hat, sunglasses, blurry, cartoon"
-                      className="w-full resize-y rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-slate-900 placeholder-slate-400 text-sm focus:border-amber-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-amber-100 transition"
-                      disabled={isGeneratingAvatar}
-                    />
-                    <p className="mt-1 text-xs text-slate-400">
-                      Things to exclude from the generated image.
-                      Comma-separated works well.
-                    </p>
-                  </div>
-                )}
-              </div>
-
-              {/* Reference images */}
-              <div className="mt-4 border-t border-slate-100 pt-4">
-                <div className="flex items-center justify-between mb-2">
-                  <div>
-                    <span className="text-xs font-semibold text-slate-600">
-                      Reference images
-                    </span>
-                    <span className="ml-1.5 text-xs text-slate-400">
-                      (optional · up to 10)
-                    </span>
-                  </div>
-                  {referenceImages.length < 10 && (
-                    <DeviceAwareUpload
-                      onUpload={handleAddReferenceImagesFiles}
-                      className="inline-block"
-                    >
-                      <button
-                        type="button"
-                        disabled={isGeneratingAvatar}
-                        className="flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-600 transition hover:border-violet-300 hover:text-violet-700 disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        <UploadIcon />
-                        Upload
-                      </button>
-                    </DeviceAwareUpload>
-                  )}
-                </div>
-
-                {referenceImages.length === 0 ? (
-                  <DeviceAwareUpload
-                    onUpload={handleAddReferenceImagesFiles}
-                    className="w-full"
-                  >
-                    <button
-                      type="button"
-                      disabled={isGeneratingAvatar}
-                      className="flex w-full items-center justify-center gap-2 rounded-xl border-2 border-dashed border-slate-200 bg-slate-50 py-5 text-xs text-slate-400 transition hover:border-violet-300 hover:text-violet-500 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      <UploadIcon />
-                      Upload reference photos to guide likeness
-                    </button>
-                  </DeviceAwareUpload>
-                ) : (
-                  <div className="flex flex-wrap gap-2">
-                    {referenceImages.map((img, i) => (
-                      <div
-                        key={i}
-                        className="relative group h-16 w-16 rounded-lg overflow-hidden border border-slate-200 bg-slate-100 flex-shrink-0"
-                      >
-                        <NextImage
-                          src={`data:${img.mime_type};base64,${img.data}`}
-                          alt={`Reference ${i + 1}`}
-                          fill
-                          unoptimized
-                          className="object-cover"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveReferenceImage(i)}
-                          className="absolute inset-0 flex items-center justify-center bg-black/50 opacity-0 group-hover:opacity-100 transition text-white text-xs font-bold"
-                          title="Remove"
-                        >
-                          ✕
-                        </button>
-                      </div>
-                    ))}
                     {referenceImages.length < 10 && (
                       <DeviceAwareUpload
                         onUpload={handleAddReferenceImagesFiles}
-                        className="h-16 w-16"
+                        className="inline-block"
                       >
                         <button
                           type="button"
                           disabled={isGeneratingAvatar}
-                          className="h-16 w-16 flex items-center justify-center rounded-lg border-2 border-dashed border-slate-200 bg-slate-50 text-slate-400 transition hover:border-violet-300 hover:text-violet-500 disabled:cursor-not-allowed disabled:opacity-50"
-                          title="Add another reference"
+                          className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 transition hover:border-violet-300 hover:text-violet-700 disabled:opacity-50"
                         >
-                          <span className="text-lg leading-none">+</span>
+                          <UploadIcon />
+                          Upload
                         </button>
                       </DeviceAwareUpload>
                     )}
                   </div>
-                )}
 
-                {referenceImages.length > 0 && (
-                  <p className="mt-2 text-xs text-slate-400">
-                    Gemini will use{' '}
-                    {referenceImages.length === 1
-                      ? 'this image'
-                      : 'these images'}{' '}
-                    as a visual guide for likeness when generating your avatar.
-                  </p>
-                )}
-              </div>
-            </div>
-
-            {/* Generate / Regenerate + Import buttons */}
-            <div className="flex gap-3">
-              {!imageBase64 ? (
-                <button
-                  onClick={handleGenerate}
-                  disabled={isGeneratingAvatar || !avatarPrompt.trim()}
-                  className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-violet-600 px-6 py-3.5 text-sm font-semibold text-white shadow-sm shadow-violet-200 transition hover:bg-violet-700 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {isGeneratingAvatar ? (
-                    <>
-                      <Spinner />
-                      Generating…
-                    </>
+                  {referenceImages.length === 0 ? (
+                    <DeviceAwareUpload
+                      onUpload={handleAddReferenceImagesFiles}
+                      className="w-full"
+                    >
+                      <button
+                        type="button"
+                        disabled={isGeneratingAvatar}
+                        className="flex w-full items-center justify-center gap-2 rounded-xl border-2 border-dashed border-slate-200 bg-white py-6 text-sm text-slate-500 transition hover:border-violet-300 hover:text-violet-600 disabled:opacity-50"
+                      >
+                        <UploadIcon />
+                        Upload reference photos to guide likeness
+                      </button>
+                    </DeviceAwareUpload>
                   ) : (
-                    'Generate Avatar'
+                    <div className="flex flex-wrap gap-2">
+                      {referenceImages.map((img, i) => (
+                        <div
+                          key={i}
+                          className="relative group h-16 w-16 rounded-xl overflow-hidden border border-slate-200 bg-slate-100 flex-shrink-0 shadow-sm"
+                        >
+                          <NextImage
+                            src={`data:${img.mime_type};base64,${img.data}`}
+                            alt={`Ref ${i}`}
+                            fill
+                            unoptimized
+                            className="object-cover"
+                          />
+                          <button
+                            onClick={() => handleRemoveReferenceImage(i)}
+                            className="absolute inset-0 flex items-center justify-center bg-black/50 opacity-0 group-hover:opacity-100 transition text-white text-xs font-bold"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      ))}
+                    </div>
                   )}
-                </button>
-              ) : (
-                <button
-                  onClick={handleGenerate}
-                  disabled={isGeneratingAvatar || !avatarPrompt.trim()}
-                  className="flex flex-1 items-center justify-center gap-2 rounded-xl border-2 border-violet-200 bg-white px-6 py-3.5 text-sm font-semibold text-violet-700 transition hover:border-violet-300 hover:bg-violet-50 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {isGeneratingAvatar ? (
-                    <>
-                      <Spinner />
-                      Generating…
-                    </>
-                  ) : (
-                    '↺ Regenerate'
-                  )}
-                </button>
-              )}
-              <DeviceAwareUpload
-                onUpload={(files) => {
-                  if (files.length > 0) {
-                    const file = files[0];
-                    const reader = new FileReader();
-                    reader.onload = () => {
-                      const result = reader.result as string;
-                      const [meta, data] = result.split(',');
-                      const mime = meta
-                        .replace('data:', '')
-                        .replace(';base64', '');
-                      setImageBase64(data);
-                      setMimeType(mime);
-                      setGenerationCount((c) => c + 1);
-                      setAvatarError(null);
-                    };
-                    reader.readAsDataURL(file);
-                  }
-                }}
-              >
-                <button
-                  disabled={isGeneratingAvatar}
-                  title="Import an existing avatar image"
-                  className="flex h-full items-center justify-center gap-1.5 rounded-xl border-2 border-slate-200 bg-white px-4 py-3.5 text-sm font-semibold text-slate-600 transition hover:border-slate-300 hover:bg-slate-50 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  <UploadIcon />
-                  Import
-                </button>
-              </DeviceAwareUpload>
-            </div>
-
-            {/* Cycling status message */}
-            {isGeneratingAvatar && (
-              <div className="flex items-center justify-center gap-2 text-sm text-violet-600">
-                <span className="inline-block h-2 w-2 rounded-full bg-violet-400 animate-pulse" />
-                {cyclingMessage}
-              </div>
-            )}
-
-            {/* Avatar error banner */}
-            {avatarError && (
-              <div className="flex items-start gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3">
-                <span className="mt-0.5 text-red-500 text-sm">⚠</span>
-                <p className="flex-1 text-sm text-red-700">{avatarError}</p>
-                <button
-                  onClick={() => setAvatarError(null)}
-                  className="text-red-400 hover:text-red-600 text-xs"
-                >
-                  ✕
-                </button>
-              </div>
-            )}
-
-            {/* Phase 2 — topic + pipeline */}
-            {imageBase64 && (
-              <div
-                className="flex flex-col gap-5 hidden"
-                style={{ animation: 'fadeSlideIn 0.4s ease both' }}
-              >
-                {/* Divider */}
-                <div className="flex items-center gap-3 py-1">
-                  <div className="h-px flex-1 bg-slate-200" />
-                  <span className="text-xs font-medium text-slate-400 whitespace-nowrap">
-                    Step 2 — Create your video
-                  </span>
-                  <div className="h-px flex-1 bg-slate-200" />
                 </div>
 
-                {/* Topic card */}
-                <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-                  <label className="block text-sm font-semibold text-slate-700 mb-1">
-                    What is your video about?
-                  </label>
-                  <p className="text-xs text-slate-400 mb-3">
-                    A one-line summary of the topic. Used to auto-generate the
-                    script if you leave the script field below empty.
-                  </p>
-                  <textarea
-                    rows={3}
-                    value={topic}
-                    onChange={(e) => setTopic(e.target.value)}
-                    placeholder="e.g. 3 morning habits that will change your life"
-                    className="w-full resize-y rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-slate-900 placeholder-slate-400 text-sm focus:border-violet-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-violet-100 transition"
-                    disabled={isStartingPipeline}
-                  />
+                {/* Avatar Action */}
+                <div className="mt-6 flex gap-3">
+                  <Button
+                    onClick={handleGenerateAvatar}
+                    disabled={isGeneratingAvatar || !avatarPrompt.trim()}
+                    className="flex-1 bg-violet-600 hover:bg-violet-700 text-white font-bold py-5 rounded-xl text-base shadow-sm shadow-violet-200"
+                  >
+                    {isGeneratingAvatar ? (
+                      <>
+                        <Spinner className="mr-2" /> Generating Avatar...
+                      </>
+                    ) : (
+                      'Generate Avatar'
+                    )}
+                  </Button>
                 </div>
 
-                {/* Script card */}
-                <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-                  {/* Mode toggle row */}
+                {avatarError && (
+                  <div className="mt-3 flex items-start gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3">
+                    <span className="text-red-500">⚠</span>
+                    <p className="flex-1 text-sm text-red-700">{avatarError}</p>
+                    <button
+                      onClick={() => setAvatarError(null)}
+                      className="text-red-400 hover:text-red-600"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                )}
+              </div>
+            </section>
+
+            {/* SECTION 2: SCRIPT & VOICE */}
+            <section className="flex flex-col gap-4">
+              <div>
+                <h2 className="text-xl font-bold text-slate-800">
+                  2. Script & Voice
+                </h2>
+                <p className="text-sm text-slate-500 mt-1">
+                  What should your avatar say?
+                </p>
+              </div>
+
+              {/* Topic */}
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5 shadow-sm">
+                <label className="block text-sm font-semibold text-slate-700 mb-1">
+                  Video Topic
+                </label>
+                <textarea
+                  rows={2}
+                  value={topic}
+                  onChange={(e) => setTopic(e.target.value)}
+                  placeholder="e.g. 3 morning habits that will change your life"
+                  className="w-full resize-y rounded-xl border border-slate-200 bg-white px-4 py-3 text-slate-900 placeholder-slate-400 text-sm focus:border-violet-400 focus:outline-none transition"
+                  disabled={isStartingPipeline}
+                />
+
+                {/* Script */}
+                <div className="mt-5">
                   <div className="flex items-center justify-between mb-3">
                     <label className="block text-sm font-semibold text-slate-700">
                       Script
                     </label>
-                    <div className="flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 p-0.5">
+                    <div className="flex items-center gap-1 rounded-full border border-slate-200 bg-white p-0.5">
                       {(['manual', 'ai'] as const).map((mode) => (
                         <button
                           key={mode}
                           onClick={() => setScriptMode(mode)}
-                          className={`rounded-full px-2.5 py-1 text-xs font-medium transition ${
+                          className={`rounded-full px-3 py-1 text-xs font-medium transition ${
                             scriptMode === mode
-                              ? 'bg-white text-violet-700 shadow-sm border border-slate-200'
+                              ? 'bg-slate-100 text-violet-700 shadow-sm border border-slate-200'
                               : 'text-slate-500 hover:text-slate-700'
                           }`}
                         >
@@ -999,136 +617,78 @@ export default function AvatarNewPage() {
                     </div>
                   </div>
 
-                  {/* AI controls row — only in AI mode */}
                   {scriptMode === 'ai' && (
                     <div className="mb-3 flex flex-wrap items-center gap-2">
                       <input
                         type="text"
                         value={aiTopic}
                         onChange={(e) => setAiTopic(e.target.value)}
-                        placeholder="Topic…"
-                        className="flex-1 min-w-0 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs text-slate-900 placeholder-slate-400 focus:border-violet-400 focus:outline-none focus:ring-1 focus:ring-violet-100 transition"
+                        placeholder="Topic for script..."
+                        className="flex-1 min-w-0 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:border-violet-400 focus:outline-none transition"
                         disabled={isGeneratingScript}
                       />
-                      <div className="flex items-center gap-1">
-                        {(['15s', '30s', '45s', '60s'] as const).map((d) => (
-                          <button
-                            key={d}
-                            onClick={() => setAiDuration(d)}
-                            className={`rounded-full px-2 py-1 text-xs font-medium transition ${
-                              aiDuration === d
-                                ? 'bg-violet-600 text-white'
-                                : 'border border-slate-200 bg-white text-slate-500 hover:border-violet-300 hover:text-violet-600'
-                            }`}
-                          >
-                            {d}
-                          </button>
-                        ))}
-                      </div>
-                      <button
+                      <select
+                        value={aiDuration}
+                        onChange={(e) => setAiDuration(e.target.value as any)}
+                        className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-violet-400"
+                        disabled={isGeneratingScript}
+                      >
+                        <option value="15s">15s</option>
+                        <option value="30s">30s</option>
+                        <option value="45s">45s</option>
+                        <option value="60s">60s</option>
+                      </select>
+                      <Button
                         onClick={handleGenerateScript}
                         disabled={isGeneratingScript || !aiTopic.trim()}
-                        className="flex items-center gap-1.5 rounded-lg bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-50"
+                        className="bg-violet-600 hover:bg-violet-700 text-white rounded-lg px-4"
                       >
-                        {isGeneratingScript ? <Spinner /> : '✨'}
-                        {isGeneratingScript ? 'Generating…' : 'Generate'}
-                      </button>
+                        {isGeneratingScript ? <Spinner /> : 'Generate'}
+                      </Button>
                     </div>
                   )}
 
-                  {/* Error message */}
                   {scriptGenerateError && (
                     <p className="mb-2 text-xs text-red-600">
                       {scriptGenerateError}
                     </p>
                   )}
-
-                  {/* Success banner */}
                   {scriptSuccessBanner && (
-                    <div className="mb-2 flex items-center justify-between rounded-lg bg-emerald-50 border border-emerald-200 px-3 py-2">
-                      <span className="text-xs text-emerald-700">
-                        ✓ Script generated — edit freely before continuing
-                      </span>
-                      <button
-                        onClick={() => setScriptSuccessBanner(false)}
-                        className="text-emerald-500 hover:text-emerald-700 text-xs ml-2"
-                      >
-                        ✕
-                      </button>
+                    <div className="mb-2 p-2 rounded-lg bg-emerald-50 text-emerald-700 text-xs">
+                      ✓ Script generated — edit freely before continuing
                     </div>
                   )}
 
-                  {/* Existing textarea — untouched */}
                   <textarea
                     rows={5}
                     value={userScript}
                     onChange={(e) => setUserScript(e.target.value)}
-                    placeholder="e.g. Did you know most people skip the one habit that changes everything? Here's what the top 1% do every single morning…"
-                    className="w-full resize-y rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-slate-900 placeholder-slate-400 text-sm focus:border-violet-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-violet-100 transition"
+                    placeholder="e.g. Did you know most people skip the one habit that changes everything?"
+                    className="w-full resize-y rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm focus:border-violet-400 focus:outline-none transition"
                     disabled={isStartingPipeline}
                   />
 
-                  {/* Live stats row */}
-                  {(() => {
-                    const words = userScript.trim()
-                      ? userScript.trim().split(/\s+/).length
-                      : 0;
-                    const estSecs = Math.round((words / 140) * 60);
-                    return (
-                      <p className="mt-1.5 text-right text-xs text-slate-400">
-                        {userScript.length} chars · {words} words · ~{estSecs}s
-                      </p>
-                    );
-                  })()}
-
-                  {/* Pipeline time estimate */}
-                  {(() => {
-                    const words = userScript.trim()
-                      ? userScript.trim().split(/\s+/).length
-                      : 0;
-                    const audioDurationSecs = (words / 140) * 60;
-                    const renderingMins = Math.max(
-                      1,
-                      Math.ceil((audioDurationSecs * 4) / 60)
-                    );
-                    const totalMins = Math.max(2, renderingMins + 1);
-                    const show = userScript.length >= 10;
-                    return (
-                      <div
-                        className="mt-3 rounded-xl border border-slate-100 bg-slate-50 px-4 py-3 transition-all duration-300"
-                        style={{
-                          opacity: show ? 1 : 0,
-                          maxHeight: show ? '120px' : '0px',
-                          overflow: 'hidden',
-                          marginTop: show ? '0.75rem' : '0',
-                        }}
-                      >
-                        <p className="text-xs text-slate-500">
-                          🎙 Voice: ~5 seconds
-                        </p>
-                        <p className="text-xs text-slate-500">
-                          🎬 Rendering: ~{renderingMins} min
-                        </p>
-                        <p className="text-xs text-slate-500">
-                          ⏱ Total: ~{totalMins} min
-                        </p>
-                      </div>
-                    );
-                  })()}
+                  {userScript.trim() && (
+                    <p className="mt-2 text-right text-xs text-slate-400">
+                      {userScript.trim().split(/\s+/).length} words · ~
+                      {Math.round(
+                        (userScript.trim().split(/\s+/).length / 140) * 60
+                      )}
+                      s
+                    </p>
+                  )}
                 </div>
 
-                {/* Voice card */}
-                <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm flex flex-col gap-4">
-                  <label className="block text-sm font-semibold text-slate-700">
+                {/* Voice */}
+                <div className="mt-5 border-t border-slate-200/60 pt-5">
+                  <label className="block text-sm font-semibold text-slate-700 mb-3">
                     Voice
                   </label>
-
-                  {/* Voice ID presets */}
-                  <div className="flex flex-col gap-2">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2 mb-3">
                     {VOICE_PRESETS.map((v) => (
                       <label
                         key={v.id}
-                        className="flex items-center gap-3 cursor-pointer"
+                        className={`flex items-center gap-3 cursor-pointer rounded-xl border p-3 transition ${selectedVoiceId === v.id && !customVoiceId.trim() ? 'border-violet-500 bg-violet-50/50' : 'border-slate-200 bg-white hover:border-slate-300'}`}
                       >
                         <input
                           type="radio"
@@ -1141,13 +701,10 @@ export default function AvatarNewPage() {
                             setSelectedVoiceId(v.id);
                             setCustomVoiceId('');
                           }}
-                          className="accent-violet-600"
+                          className="accent-violet-600 w-4 h-4"
                         />
-                        <span className="text-sm text-slate-700">
+                        <span className="text-sm font-medium text-slate-700">
                           {v.label}
-                        </span>
-                        <span className="ml-auto font-mono text-xs text-slate-400 truncate max-w-[160px]">
-                          {v.id}
                         </span>
                       </label>
                     ))}
@@ -1156,337 +713,289 @@ export default function AvatarNewPage() {
                     type="text"
                     value={customVoiceId}
                     onChange={(e) => setCustomVoiceId(e.target.value)}
-                    placeholder="Or paste a custom Cartesia voice ID…"
-                    className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 font-mono text-xs text-slate-900 placeholder-slate-400 focus:border-violet-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-violet-100 transition"
+                    placeholder="Or paste custom Cartesia voice ID..."
+                    className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 font-mono text-sm focus:border-violet-400 focus:outline-none transition"
                   />
-
-                  {/* Divider */}
-                  <div className="h-px bg-slate-100" />
-
-                  {/* Style mode toggle */}
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm font-semibold text-slate-700">
-                      Voice Style
-                    </span>
-                    <div className="flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 p-0.5">
-                      {(['auto', 'manual'] as const).map((m) => (
-                        <button
-                          key={m}
-                          onClick={() => setVoiceStyleMode(m)}
-                          className={`rounded-full px-2.5 py-1 text-xs font-medium transition ${
-                            voiceStyleMode === m
-                              ? 'bg-white text-violet-700 shadow-sm border border-slate-200'
-                              : 'text-slate-500 hover:text-slate-700'
-                          }`}
-                        >
-                          {m === 'auto' ? '✨ Auto from topic' : '🎛 Manual'}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  {voiceStyleMode === 'auto' && (
-                    <p className="text-xs text-slate-400">
-                      Gemini will read your topic description and choose the
-                      right emotion, speed, and volume automatically.
-                    </p>
-                  )}
-
-                  {voiceStyleMode === 'manual' && (
-                    <div className="flex flex-col gap-4">
-                      {/* Emotion */}
-                      <div>
-                        <label className="block text-xs font-medium text-slate-600 mb-2">
-                          Emotion
-                        </label>
-                        <div className="flex flex-wrap gap-1.5">
-                          {EMOTION_OPTIONS.map((e) => (
-                            <button
-                              key={e}
-                              onClick={() => setManualEmotion(e)}
-                              className={`rounded-full px-2.5 py-1 text-xs font-medium transition capitalize ${
-                                manualEmotion === e
-                                  ? 'bg-violet-600 text-white'
-                                  : 'border border-slate-200 bg-white text-slate-500 hover:border-violet-300 hover:text-violet-600'
-                              }`}
-                            >
-                              {e}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-
-                      {/* Speed */}
-                      <div>
-                        <div className="flex justify-between items-center mb-1">
-                          <label className="text-xs font-medium text-slate-600">
-                            Speed
-                          </label>
-                          <span className="text-xs font-mono text-violet-700">
-                            {manualSpeed.toFixed(2)}×
-                          </span>
-                        </div>
-                        <input
-                          type="range"
-                          min={0.6}
-                          max={1.5}
-                          step={0.05}
-                          value={manualSpeed}
-                          onChange={(e) =>
-                            setManualSpeed(parseFloat(e.target.value))
-                          }
-                          className="w-full accent-violet-600"
-                        />
-                        <div className="flex justify-between text-xs text-slate-400 mt-0.5">
-                          <span>0.6× slow</span>
-                          <span>1.5× fast</span>
-                        </div>
-                      </div>
-
-                      {/* Volume */}
-                      <div>
-                        <div className="flex justify-between items-center mb-1">
-                          <label className="text-xs font-medium text-slate-600">
-                            Volume
-                          </label>
-                          <span className="text-xs font-mono text-violet-700">
-                            {manualVolume.toFixed(2)}×
-                          </span>
-                        </div>
-                        <input
-                          type="range"
-                          min={0.5}
-                          max={2.0}
-                          step={0.1}
-                          value={manualVolume}
-                          onChange={(e) =>
-                            setManualVolume(parseFloat(e.target.value))
-                          }
-                          className="w-full accent-violet-600"
-                        />
-                        <div className="flex justify-between text-xs text-slate-400 mt-0.5">
-                          <span>0.5× quiet</span>
-                          <span>2.0× loud</span>
-                        </div>
-                      </div>
-                    </div>
-                  )}
                 </div>
+              </div>
+            </section>
+          </div>
+        </div>
 
+        {/* RIGHT PANE (40%) - Preview & Action */}
+        <div className="w-full lg:w-[40%] bg-[#F8FAFC] flex flex-col p-6 md:p-8">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-xl font-bold text-slate-800">Preview</h2>
+
+            {/* Version Carousel Navigator */}
+            {versions.length > 1 && (
+              <div className="flex items-center gap-2 bg-white rounded-full border border-slate-200 px-3 py-1.5 shadow-sm">
                 <button
-                  onClick={handleStartPipeline}
-                  disabled={isStartingPipeline || !topic.trim()}
-                  className="flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 px-6 py-4 text-sm font-bold text-white shadow-md shadow-emerald-100 transition hover:bg-emerald-700 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
+                  onClick={() =>
+                    setCurrentVersionIndex(Math.max(0, currentVersionIndex - 1))
+                  }
+                  disabled={currentVersionIndex === 0}
+                  className="text-slate-400 hover:text-slate-700 disabled:opacity-30 disabled:hover:text-slate-400"
                 >
-                  {isStartingPipeline ? (
-                    <>
-                      <Spinner />
-                      Starting pipeline…
-                    </>
-                  ) : (
-                    <>Generate Video →</>
-                  )}
+                  <svg
+                    className="w-4 h-4"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                    strokeWidth={2}
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M15 19l-7-7 7-7"
+                    />
+                  </svg>
                 </button>
-
-                {pipelineError && (
-                  <div className="flex items-start gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3">
-                    <span className="mt-0.5 text-red-500 text-sm">⚠</span>
-                    <p className="flex-1 text-sm text-red-700">
-                      {pipelineError}
-                    </p>
-                    <button
-                      onClick={() => setPipelineError(null)}
-                      className="text-red-400 hover:text-red-600 text-xs"
-                    >
-                      ✕
-                    </button>
-                  </div>
-                )}
+                <span className="text-xs font-semibold text-slate-600">
+                  v{currentVersionIndex + 1} of {versions.length}
+                </span>
+                <button
+                  onClick={() =>
+                    setCurrentVersionIndex(
+                      Math.min(versions.length - 1, currentVersionIndex + 1)
+                    )
+                  }
+                  disabled={currentVersionIndex === versions.length - 1}
+                  className="text-slate-400 hover:text-slate-700 disabled:opacity-30 disabled:hover:text-slate-400"
+                >
+                  <svg
+                    className="w-4 h-4"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                    strokeWidth={2}
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M9 5l7 7-7 7"
+                    />
+                  </svg>
+                </button>
               </div>
             )}
           </div>
 
-          {/* Right column — preview, sticky on desktop */}
-          <div
-            ref={imageContainerRef}
-            className="w-full md:w-[400px] md:flex-shrink-0 md:sticky md:top-6 flex flex-col gap-4 mt-6 md:mt-0 scroll-mt-6"
-          >
-            {/* Preview box */}
+          <div className="flex-1 flex flex-col">
             <div
-              className="relative w-full rounded-2xl overflow-hidden border border-slate-200 bg-white shadow-sm"
-              style={{
-                aspectRatio:
-                  imageBase64 && imageAspectRatio ? imageAspectRatio : '3/4',
-                minHeight: '480px',
-              }}
+              className={`relative w-full aspect-[3/4] max-h-[60vh] rounded-2xl overflow-hidden border ${isGeneratingAvatar ? 'border-violet-300 shadow-violet-100' : 'border-slate-200'} bg-white shadow-md transition-colors mx-auto flex items-center justify-center`}
             >
-              {imageBase64 ? (
-                <>
+              {isGeneratingAvatar ? (
+                <div className="flex flex-col items-center justify-center gap-4 animate-pulse">
+                  <div className="w-16 h-16 rounded-full bg-violet-100 flex items-center justify-center">
+                    <Spinner className="w-8 h-8 text-violet-500" />
+                  </div>
+                  <p className="text-sm font-medium text-violet-600">
+                    {cyclingMessage}
+                  </p>
+                </div>
+              ) : currentAvatar ? (
+                <div className="relative w-full h-full group">
                   <NextImage
-                    src={`data:${mimeType};base64,${imageBase64}`}
-                    alt="Generated avatar"
+                    src={`data:${currentAvatar.mimeType};base64,${currentAvatar.base64}`}
+                    alt={`Avatar v${currentVersionIndex + 1}`}
                     fill
                     unoptimized
-                    className="object-contain transition-opacity duration-700 cursor-zoom-in"
-                    style={{ opacity: imageVisible ? 1 : 0 }}
+                    className="object-contain cursor-zoom-in"
                     onClick={() => setLightboxOpen(true)}
-                    onLoad={(e) => {
-                      const img = e.currentTarget as HTMLImageElement;
-                      setImageAspectRatio(
-                        `${img.naturalWidth} / ${img.naturalHeight}`
-                      );
-                      setImageVisible(true);
-                    }}
                   />
-                  <button
-                    onClick={handleCopy}
-                    title="Copy image"
-                    className="absolute top-2 right-2 flex h-8 w-8 items-center justify-center rounded-lg bg-black/40 text-white backdrop-blur-sm transition hover:bg-black/60 active:scale-95"
-                  >
-                    {copied ? (
+
+                  {/* Hover Actions */}
+                  <div className="absolute top-3 right-3 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <button
+                      onClick={() => setLightboxOpen(true)}
+                      className="w-9 h-9 flex items-center justify-center rounded-lg bg-black/60 text-white backdrop-blur-sm hover:bg-black/80 transition"
+                      title="Fullscreen"
+                    >
                       <svg
-                        className="h-4 w-4 text-emerald-400"
-                        viewBox="0 0 24 24"
+                        className="w-4 h-4"
                         fill="none"
-                        stroke="currentColor"
-                        strokeWidth={2.5}
-                      >
-                        <path
-                          d="M5 13l4 4L19 7"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                        />
-                      </svg>
-                    ) : (
-                      <svg
-                        className="h-4 w-4"
                         viewBox="0 0 24 24"
-                        fill="none"
                         stroke="currentColor"
                         strokeWidth={2}
                       >
-                        <rect x="9" y="9" width="13" height="13" rx="2" />
                         <path
-                          d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"
                           strokeLinecap="round"
+                          strokeLinejoin="round"
+                          d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"
                         />
                       </svg>
-                    )}
-                  </button>
-                </>
+                    </button>
+                    <button
+                      onClick={handleDownload}
+                      className="w-9 h-9 flex items-center justify-center rounded-lg bg-black/60 text-white backdrop-blur-sm hover:bg-black/80 transition"
+                      title="Download"
+                    >
+                      <DownloadIcon />
+                    </button>
+                  </div>
+                </div>
               ) : (
-                <div className="flex h-full flex-col items-center justify-center gap-3 bg-slate-50">
-                  <div className="rounded-full bg-slate-200 p-5">
+                <div className="text-center px-6">
+                  <div className="w-20 h-20 rounded-full bg-slate-100 mx-auto flex items-center justify-center mb-4">
                     <PersonIcon />
                   </div>
-                  <p className="text-sm text-slate-400">
-                    Avatar preview will appear here
+                  <h3 className="text-lg font-semibold text-slate-800">
+                    No Avatar Yet
+                  </h3>
+                  <p className="text-sm text-slate-500 mt-1 max-w-[250px] mx-auto">
+                    Fill out the prompt on the left to generate your first
+                    avatar.
                   </p>
                 </div>
               )}
             </div>
 
-            {imageBase64 && (
-              <>
-                <div className="flex items-center justify-center gap-3">
-                  <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 border border-emerald-200 px-3 py-1 text-xs font-medium text-emerald-700">
-                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-                    Avatar ready
-                  </span>
-                  <span className="text-xs text-slate-400">
-                    Generated {generationCount}{' '}
-                    {generationCount === 1 ? 'time' : 'times'}
-                  </span>
-                </div>
+            {/* Action Area */}
+            <div className="mt-8 flex flex-col gap-4">
+              <Button
+                onClick={handleStartPipeline}
+                disabled={isStartingPipeline || !currentAvatar || !topic.trim()}
+                className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-6 rounded-xl text-base shadow-md shadow-emerald-100 transition-transform active:scale-[0.98]"
+              >
+                {isStartingPipeline ? (
+                  <>
+                    <Spinner className="mr-2" /> Starting Pipeline...
+                  </>
+                ) : (
+                  'Start Video Pipeline →'
+                )}
+              </Button>
 
-                <div className="flex flex-wrap gap-3">
-                  <button
-                    onClick={handleGenerate}
-                    disabled={isGeneratingAvatar || !avatarPrompt.trim()}
-                    className="flex flex-1 items-center justify-center gap-1.5 rounded-xl border-2 border-violet-200 bg-white py-2.5 text-sm font-semibold text-violet-700 transition hover:border-violet-300 hover:bg-violet-50 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 min-w-[120px]"
-                  >
-                    {isGeneratingAvatar ? <Spinner /> : '↺'} Regenerate
-                  </button>
-                  <button
-                    onClick={handlePushToLibrary}
-                    className="flex flex-1 items-center justify-center gap-1.5 rounded-xl border-2 border-violet-200 bg-white py-2.5 text-sm font-semibold text-violet-700 transition hover:border-violet-300 hover:bg-violet-50 active:scale-[0.98] min-w-[120px]"
-                  >
-                    <svg
-                      xmlns="http://www.w3.org/2000/svg"
-                      width="16"
-                      height="16"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    >
-                      <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-                      <circle cx="8.5" cy="8.5" r="1.5" />
-                      <polyline points="21 15 16 10 5 21" />
-                    </svg>
-                    Push to Library
-                  </button>
-                  <button
-                    onClick={handleDownload}
-                    className="flex flex-1 items-center justify-center gap-1.5 rounded-xl border-2 border-slate-200 bg-white py-2.5 text-sm font-semibold text-slate-600 transition hover:border-slate-300 hover:bg-slate-50 active:scale-[0.98] min-w-[100px]"
-                  >
-                    <DownloadIcon />
-                    Download
-                  </button>
+              {pipelineError && (
+                <div className="flex items-start gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3">
+                  <span className="text-red-500">⚠</span>
+                  <p className="flex-1 text-sm text-red-700">{pipelineError}</p>
                 </div>
-              </>
-            )}
+              )}
+            </div>
           </div>
         </div>
       </div>
 
-      {lightboxOpen && imageBase64 && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm"
-          onClick={() => setLightboxOpen(false)}
-        >
-          <NextImage
-            src={`data:${mimeType};base64,${imageBase64}`}
-            alt="Avatar enlarged"
-            width={1200}
-            height={1200}
-            unoptimized
-            className="max-h-[90vh] max-w-[90vw] rounded-2xl shadow-2xl object-contain"
-            onClick={(e) => e.stopPropagation()}
-          />
-          <button
-            onClick={() => setLightboxOpen(false)}
-            className="absolute top-4 right-4 flex h-9 w-9 items-center justify-center rounded-full bg-white/10 text-white backdrop-blur-sm transition hover:bg-white/20"
-          >
-            <svg
-              viewBox="0 0 24 24"
-              className="h-5 w-5"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth={2}
-            >
-              <path d="M18 6 6 18M6 6l12 12" strokeLinecap="round" />
-            </svg>
-          </button>
+      {/* Onboarding Modal */}
+      {showOnboarding && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg overflow-hidden flex flex-col">
+            <div className="p-8 flex-1 text-center">
+              {onboardingSlide === 0 && (
+                <div className="animate-in fade-in slide-in-from-right-4 duration-300">
+                  <div className="text-4xl mb-4">👋</div>
+                  <h2 className="text-2xl font-bold text-slate-800 mb-2">
+                    Welcome to Kuai Labs
+                  </h2>
+                  <p className="text-slate-500">
+                    Create AI avatars and script-driven video content in
+                    minutes. Let's walk through how it works.
+                  </p>
+                </div>
+              )}
+              {onboardingSlide === 1 && (
+                <div className="animate-in fade-in slide-in-from-right-4 duration-300">
+                  <div className="text-4xl mb-4">🖼️</div>
+                  <h2 className="text-2xl font-bold text-slate-800 mb-2">
+                    1. Design your Avatar
+                  </h2>
+                  <p className="text-slate-500">
+                    Use text prompts and optional reference photos to generate a
+                    unique presenter for your videos.
+                  </p>
+                </div>
+              )}
+              {onboardingSlide === 2 && (
+                <div className="animate-in fade-in slide-in-from-right-4 duration-300">
+                  <div className="text-4xl mb-4">🎬</div>
+                  <h2 className="text-2xl font-bold text-slate-800 mb-2">
+                    2. Generate the Video
+                  </h2>
+                  <p className="text-slate-500">
+                    Write your script (or let AI write it), pick a voice, and
+                    we'll animate your avatar to deliver the message.
+                  </p>
+                </div>
+              )}
+            </div>
+            <div className="bg-slate-50 p-4 border-t border-slate-100 flex items-center justify-between">
+              <div className="flex gap-1.5 ml-4">
+                {[0, 1, 2].map((i) => (
+                  <div
+                    key={i}
+                    className={`w-2 h-2 rounded-full transition-colors ${onboardingSlide === i ? 'bg-violet-500' : 'bg-slate-300'}`}
+                  />
+                ))}
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={completeOnboarding}
+                  className="px-4 py-2 text-slate-500 hover:text-slate-800 text-sm font-medium"
+                >
+                  Skip
+                </button>
+                <button
+                  onClick={() =>
+                    onboardingSlide < 2
+                      ? setOnboardingSlide((s) => s + 1)
+                      : completeOnboarding()
+                  }
+                  className="px-6 py-2 bg-violet-600 hover:bg-violet-700 text-white text-sm font-medium rounded-lg transition-colors shadow-sm"
+                >
+                  {onboardingSlide < 2 ? 'Next' : 'Get Started'}
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
 
-      <style>{`
-        @keyframes fadeSlideIn {
-          from { opacity: 0; transform: translateY(10px); }
-          to   { opacity: 1; transform: translateY(0); }
-        }
-      `}</style>
+      {/* Lightbox for Fullscreen View */}
+      {lightboxOpen && currentAvatar && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-sm"
+          onClick={() => setLightboxOpen(false)}
+        >
+          <div className="relative w-full h-full p-8 flex items-center justify-center">
+            <NextImage
+              src={`data:${currentAvatar.mimeType};base64,${currentAvatar.base64}`}
+              alt="Avatar Fullscreen"
+              fill
+              unoptimized
+              className="object-contain"
+              onClick={(e) => e.stopPropagation()}
+            />
+            <button
+              onClick={() => setLightboxOpen(false)}
+              className="absolute top-6 right-6 w-12 h-12 flex items-center justify-center rounded-full bg-white/10 text-white hover:bg-white/20 transition backdrop-blur-md"
+            >
+              <svg
+                className="w-6 h-6"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth={2}
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M6 18L18 6M6 6l12 12"
+                />
+              </svg>
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
-function Spinner() {
+function Spinner({ className = 'w-4 h-4' }: { className?: string }) {
   return (
     <svg
-      className="h-4 w-4 animate-spin"
+      className={`animate-spin ${className}`}
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
@@ -1501,7 +1010,7 @@ function Spinner() {
 function DownloadIcon() {
   return (
     <svg
-      className="h-4 w-4"
+      className="w-4 h-4"
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
@@ -1520,7 +1029,7 @@ function DownloadIcon() {
 function UploadIcon() {
   return (
     <svg
-      className="h-4 w-4"
+      className="w-4 h-4"
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
@@ -1539,7 +1048,7 @@ function UploadIcon() {
 function PersonIcon() {
   return (
     <svg
-      className="h-10 w-10 text-slate-300"
+      className="w-10 h-10 text-slate-300"
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"

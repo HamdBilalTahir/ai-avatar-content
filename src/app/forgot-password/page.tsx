@@ -1,52 +1,29 @@
 'use client';
 
 import React, { useState } from 'react';
-import { signInWithEmailAndPassword } from 'firebase/auth';
-import { auth } from '@/lib/firebase';
-import { useRouter, useSearchParams } from 'next/navigation';
-import Link from 'next/link';
 import { sendPasswordResetEmail } from 'firebase/auth';
+import { auth } from '@/lib/firebase';
+import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardFooter } from '@/components/ui/card';
 import { LayoutGrid } from 'lucide-react';
 
-export default function LoginPage() {
+export default function ForgotPasswordPage() {
   const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [error, setError] = useState('');
   const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const router = useRouter();
-  const searchParams = useSearchParams();
 
-  const handleLogin = async (e: React.FormEvent) => {
+  const handleReset = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     setMessage('');
     setIsLoading(true);
     try {
-      await signInWithEmailAndPassword(auth, email, password);
-      const returnUrl = searchParams.get('returnUrl') || '/';
-      router.push(returnUrl);
-    } catch (err: any) {
-      setError(err.message || 'Failed to login');
-      setIsLoading(false);
-    }
-  };
-
-  const handleForgotPassword = async () => {
-    setError('');
-    setMessage('');
-    if (!email.trim()) {
-      setError('Please enter your email address first to reset your password.');
-      return;
-    }
-    setIsLoading(true);
-    try {
       await sendPasswordResetEmail(auth, email);
-      setMessage('Password reset email sent! Please check your inbox.');
+      setMessage('Password reset email sent! Check your inbox.');
     } catch (err: any) {
       setError(err.message || 'Failed to send reset email');
     } finally {
@@ -62,10 +39,10 @@ export default function LoginPage() {
             <LayoutGrid className="h-6 w-6" />
           </div>
           <h1 className="text-2xl font-bold tracking-tight text-foreground">
-            Welcome back
+            Reset Password
           </h1>
           <p className="text-sm text-muted-foreground">
-            Log in to your Kuai Labs account
+            Enter your email to reset your password
           </p>
         </div>
 
@@ -81,7 +58,7 @@ export default function LoginPage() {
                 {message}
               </div>
             )}
-            <form onSubmit={handleLogin} className="space-y-4">
+            <form onSubmit={handleReset} className="space-y-4">
               <div className="space-y-2">
                 <Label htmlFor="email">Email</Label>
                 <Input
@@ -94,39 +71,19 @@ export default function LoginPage() {
                   disabled={isLoading}
                 />
               </div>
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <Label htmlFor="password">Password</Label>
-                  <button
-                    type="button"
-                    onClick={handleForgotPassword}
-                    className="text-sm font-medium text-primary hover:underline bg-transparent border-none p-0 cursor-pointer"
-                  >
-                    Forgot your password?
-                  </button>
-                </div>
-                <Input
-                  id="password"
-                  type="password"
-                  required
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  disabled={isLoading}
-                />
-              </div>
               <Button type="submit" className="w-full" disabled={isLoading}>
-                {isLoading ? 'Signing in...' : 'Sign in'}
+                {isLoading ? 'Sending...' : 'Send Reset Link'}
               </Button>
             </form>
           </CardContent>
           <CardFooter className="justify-center border-t border-border pt-6 pb-6">
             <p className="text-sm text-muted-foreground">
-              Don't have an account?{' '}
+              Remember your password?{' '}
               <Link
-                href={`/signup${searchParams.toString() ? `?${searchParams.toString()}` : ''}`}
+                href="/login"
                 className="font-medium text-primary hover:underline"
               >
-                Sign up
+                Sign in
               </Link>
             </p>
           </CardFooter>

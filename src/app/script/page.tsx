@@ -7,13 +7,18 @@ import DeviceAwareUpload from '@/components/DeviceAwareUpload';
 import { ConfirmPopup } from '@/components/ConfirmPopup';
 import PromptEditor from '@/components/PromptEditor';
 import { useAuth } from '@/lib/AuthContext';
+import { useProvider } from '@/lib/ProviderContext';
+import TopHeader from '@/components/TopHeader';
+import { Button } from '@/components/ui/button';
+import ProviderStatus from '@/components/ProviderStatus';
 import { db } from '@/lib/firebase';
 import {
   collection,
   doc,
-  setDoc,
+  addDoc,
   getDoc,
   getDocs,
+  deleteDoc,
   updateDoc,
   query,
   where,
@@ -83,6 +88,7 @@ async function resizeImageToBase64(file: File, maxPx: number): Promise<string> {
 
 export default function ScriptPage() {
   const { user } = useAuth();
+  const { providerConfig } = useProvider();
   const [threads, setThreads] = useState<ScriptThread[]>([]);
   const [activeThreadId, setActiveThreadId] = useState('');
   const [editingThreadId, setEditingThreadId] = useState<string | null>(null);
@@ -92,15 +98,17 @@ export default function ScriptPage() {
   const [isLoaded, setIsLoaded] = useState(false);
   const [expandedShotIndex, setExpandedShotIndex] = useState<number | null>(0);
   const [images, setImages] = useState<ImageItem[]>([]);
-  const [apiKey, setApiKey] = useState('');
-  const [model, setModel] = useState('veo-3.1-fast-generate-preview');
+  const [model, setModel] = useState('veo-3.1-fast-generate-001');
   const [isGenerating, setIsGenerating] = useState(false);
-  const [playingVideoUrl, setPlayingVideoUrl] = useState<string | null>(null);
+  const [playingVideo, setPlayingVideo] = useState<{
+    url: string;
+    filename: string;
+  } | null>(null);
   const [abortController, setAbortController] =
     useState<AbortController | null>(null);
   const [recentSuccessUrls, setRecentSuccessUrls] = useState<string[]>([]);
   const [globals, setGlobals] = useState<
-    { name: string; value: string; isEditing?: boolean }[]
+    { id?: string; name: string; value: string; isEditing?: boolean }[]
   >([]);
   const [isGlobalsExpanded, setIsGlobalsExpanded] = useState(false);
   const [isShotsExpanded, setIsShotsExpanded] = useState(true);
@@ -117,9 +125,6 @@ export default function ScriptPage() {
     name: '',
     value: '',
   });
-  const [isApiPopupOpen, setIsApiPopupOpen] = useState(false);
-  const [tempApiKey, setTempApiKey] = useState('');
-  const [isCopied, setIsCopied] = useState(false);
   const [shotToDelete, setShotToDelete] = useState<number | null>(null);
   const [isDeletingAllVars, setIsDeletingAllVars] = useState(false);
   const [varToDelete, setVarToDelete] = useState<number | null>(null);
@@ -171,7 +176,6 @@ export default function ScriptPage() {
       const scriptSnap = await getDoc(doc(db, 'scripts', threadId));
       if (scriptSnap.exists()) {
         const data = scriptSnap.data();
-        if (data.apiKey) setApiKey(data.apiKey);
         if (data.model) setModel(data.model);
       }
 
@@ -179,6 +183,7 @@ export default function ScriptPage() {
         collection(db, 'scripts', threadId, 'globals')
       );
       const loadedGlobals = globalsSnap.docs.map((d) => ({
+        id: d.id,
         name: d.data().name,
         value: d.data().value,
       }));
@@ -262,19 +267,16 @@ export default function ScriptPage() {
         let loadedThreads: ScriptThread[] = [];
 
         if (scriptsSnap.empty) {
-          const firstId = `t_${Date.now()}`;
           const inferredName = 'Script 1';
-          loadedThreads = [
-            { id: firstId, name: inferredName, createdAt: Date.now() },
-          ];
-
-          await setDoc(doc(db, 'scripts', firstId), {
-            scriptId: firstId,
+          const scriptRef = await addDoc(collection(db, 'scripts'), {
             userId: user.uid,
             name: inferredName,
             createdAt: serverTimestamp(),
             updatedAt: serverTimestamp(),
           });
+          loadedThreads = [
+            { id: scriptRef.id, name: inferredName, createdAt: Date.now() },
+          ];
         } else {
           loadedThreads = scriptsSnap.docs.map((d) => ({
             id: d.id,
@@ -294,7 +296,7 @@ export default function ScriptPage() {
         localStorage.setItem('active_thread_id', activeId);
 
         const imagesSnap = await getDocs(
-          collection(db, 'imageLibraries', user.uid, 'images')
+          query(collection(db, 'imageLibrary'), where('userId', '==', user.uid))
         );
         const loadedImages = imagesSnap.docs
           .map((d) => ({
@@ -309,12 +311,7 @@ export default function ScriptPage() {
         await loadThreadData(activeId);
 
         // Setup baseline for sync
-        lastSavedRef.current = JSON.stringify({
-          shots,
-          globals,
-          apiKey,
-          model,
-        });
+        lastSavedRef.current = JSON.stringify({ shots, globals, model });
         setIsLoaded(true);
       } catch (error) {
         console.error('Error loading scripts:', error);
@@ -328,8 +325,7 @@ export default function ScriptPage() {
   const syncToFirestoreNow = async (
     threadId: string,
     currentShots: Shot[],
-    currentGlobals: { name: string; value: string }[],
-    currentApiKey: string,
+    currentGlobals: { id?: string; name: string; value: string }[],
     currentModel: string
   ) => {
     if (!user || !isLoaded) return;
@@ -339,11 +335,7 @@ export default function ScriptPage() {
 
       batch.set(
         scriptRef,
-        {
-          model: currentModel,
-          apiKey: currentApiKey,
-          updatedAt: serverTimestamp(),
-        },
+        { model: currentModel, updatedAt: serverTimestamp() },
         { merge: true }
       );
 
@@ -352,11 +344,13 @@ export default function ScriptPage() {
       );
       const existingShotIds = new Set(shotsSnap.docs.map((d) => d.id));
 
+      // Track new shots that need their local id replaced with Firestore auto-id
+      const idUpdates: { oldId: string; newId: string }[] = [];
+
       currentShots.forEach((shot) => {
         if (!shot.id) return;
-        const shotRef = doc(db, 'scripts', threadId, 'shots', shot.id);
+
         const shotData: any = {
-          shotId: shot.id,
           scriptId: threadId,
           shotNumber: shot.shot_number,
           duration: shot.duration,
@@ -369,15 +363,19 @@ export default function ScriptPage() {
         };
 
         if (existingShotIds.has(shot.id)) {
-          // existing shot, just merge
+          // Shot already exists in Firestore — update in place
+          const shotRef = doc(db, 'scripts', threadId, 'shots', shot.id);
+          shotData.shotId = shot.id;
           batch.set(shotRef, shotData, { merge: true });
+          existingShotIds.delete(shot.id);
         } else {
-          // new shot, add createdAt
+          // New shot — let Firestore generate the ID
+          const newShotRef = doc(collection(db, 'scripts', threadId, 'shots'));
+          shotData.shotId = newShotRef.id;
           shotData.createdAt = serverTimestamp();
-          batch.set(shotRef, shotData, { merge: true });
+          batch.set(newShotRef, shotData);
+          idUpdates.push({ oldId: shot.id, newId: newShotRef.id });
         }
-
-        existingShotIds.delete(shot.id);
       });
 
       existingShotIds.forEach((id) => {
@@ -388,28 +386,32 @@ export default function ScriptPage() {
         collection(db, 'scripts', threadId, 'globals')
       );
       const existingGlobalIds = new Set(globalsSnap.docs.map((d) => d.id));
+      const globalIdUpdates: { oldName: string; newId: string }[] = [];
 
       currentGlobals.forEach((g) => {
         if (!g.name.trim()) return;
-        const globalId = g.name.trim().replace(/\//g, '_');
-        const globalRef = doc(db, 'scripts', threadId, 'globals', globalId);
 
         const globalData: any = {
-          globalId,
           scriptId: threadId,
           name: g.name,
           value: g.value,
           updatedAt: serverTimestamp(),
         };
 
-        if (existingGlobalIds.has(globalId)) {
+        if (g.id && existingGlobalIds.has(g.id)) {
+          const globalRef = doc(db, 'scripts', threadId, 'globals', g.id);
+          globalData.globalId = g.id;
           batch.set(globalRef, globalData, { merge: true });
+          existingGlobalIds.delete(g.id);
         } else {
+          const newGlobalRef = doc(
+            collection(db, 'scripts', threadId, 'globals')
+          );
+          globalData.globalId = newGlobalRef.id;
           globalData.createdAt = serverTimestamp();
-          batch.set(globalRef, globalData, { merge: true });
+          batch.set(newGlobalRef, globalData);
+          globalIdUpdates.push({ oldName: g.name, newId: newGlobalRef.id });
         }
-
-        existingGlobalIds.delete(globalId);
       });
 
       existingGlobalIds.forEach((id) => {
@@ -417,10 +419,31 @@ export default function ScriptPage() {
       });
 
       await batch.commit();
+
+      if (idUpdates.length > 0) {
+        setShots((prev) =>
+          prev.map((s) => {
+            const update = idUpdates.find((u) => u.oldId === s.id);
+            return update ? { ...s, id: update.newId } : s;
+          })
+        );
+      }
+      if (globalIdUpdates.length > 0) {
+        setGlobals((prev) => {
+          const updates = new Map(
+            globalIdUpdates.map((u) => [u.oldName, u.newId])
+          );
+          return prev.map((g) =>
+            !g.id && updates.has(g.name)
+              ? { ...g, id: updates.get(g.name)! }
+              : g
+          );
+        });
+      }
+
       lastSavedRef.current = JSON.stringify({
         shots: currentShots,
         globals: currentGlobals,
-        apiKey: currentApiKey,
         model: currentModel,
       });
     } catch (e) {
@@ -431,20 +454,20 @@ export default function ScriptPage() {
   React.useEffect(() => {
     if (!isLoaded || !activeThreadId || !user) return;
 
-    const currentDataStr = JSON.stringify({ shots, globals, apiKey, model });
+    const currentDataStr = JSON.stringify({ shots, globals, model });
     if (lastSavedRef.current === currentDataStr) return;
 
     const timeoutId = setTimeout(() => {
-      syncToFirestoreNow(activeThreadId, shots, globals, apiKey, model);
+      syncToFirestoreNow(activeThreadId, shots, globals, model);
     }, 1500);
 
     return () => clearTimeout(timeoutId);
-  }, [shots, globals, apiKey, model, isLoaded, activeThreadId, user]);
+  }, [shots, globals, model, isLoaded, activeThreadId, user]);
 
   const switchThread = async (id: string) => {
     if (id === activeThreadId) return;
 
-    await syncToFirestoreNow(activeThreadId, shots, globals, apiKey, model);
+    await syncToFirestoreNow(activeThreadId, shots, globals, model);
 
     setActiveThreadId(id);
     localStorage.setItem('active_thread_id', id);
@@ -456,24 +479,20 @@ export default function ScriptPage() {
 
   const createThread = async () => {
     if (!user) return;
-    const id = `t_${Date.now()}`;
     const name = `Script ${threads.length + 1}`;
-    const newThread: ScriptThread = { id, name, createdAt: Date.now() };
-    const updated = [newThread, ...threads];
-    setThreads(updated);
-
     try {
-      await setDoc(doc(db, 'scripts', id), {
-        scriptId: id,
+      const scriptRef = await addDoc(collection(db, 'scripts'), {
         userId: user.uid,
         name,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
+      const id = scriptRef.id;
+      setThreads((prev) => [{ id, name, createdAt: Date.now() }, ...prev]);
+      switchThread(id);
     } catch (e) {
       console.error(e);
     }
-    switchThread(id);
   };
 
   const deleteThread = async (id: string) => {
@@ -512,13 +531,13 @@ export default function ScriptPage() {
 
   React.useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && playingVideoUrl) {
-        setPlayingVideoUrl(null);
+      if (e.key === 'Escape' && playingVideo) {
+        setPlayingVideo(null);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [playingVideoUrl]);
+  }, [playingVideo]);
 
   const addShot = () => {
     const newShot: Shot = {
@@ -568,29 +587,27 @@ export default function ScriptPage() {
             prev.map((i) => (i.id === img.id ? { ...i, blobUrl } : i))
           );
           try {
-            const userLibRef = doc(db, 'imageLibraries', user!.uid);
-            const userLibSnap = await getDoc(userLibRef);
-
-            if (!userLibSnap.exists()) {
-              await setDoc(userLibRef, {
-                userId: user!.uid,
-                createdAt: serverTimestamp(),
-                updatedAt: serverTimestamp(),
-              });
-            } else {
-              await updateDoc(userLibRef, {
-                updatedAt: serverTimestamp(),
-              });
-            }
-
-            await setDoc(
-              doc(db, 'imageLibraries', user!.uid, 'images', img.id),
-              {
-                id: img.id,
-                name: img.file.name,
-                blobUrl,
-                createdAt: serverTimestamp(),
-              }
+            const imageDocRef = await addDoc(collection(db, 'imageLibrary'), {
+              userId: user!.uid,
+              name: img.file.name,
+              blobUrl,
+              createdAt: serverTimestamp(),
+            });
+            setImages((prev) =>
+              prev.map((i) =>
+                i.id === img.id ? { ...i, id: imageDocRef.id } : i
+              )
+            );
+            // Also update any shots that might be referencing this temporary id
+            setShots((prevShots) =>
+              prevShots.map((shot) => ({
+                ...shot,
+                imageRefs: shot.imageRefs
+                  ? shot.imageRefs.map((ref) =>
+                      ref === img.id ? imageDocRef.id : ref
+                    )
+                  : [],
+              }))
             );
           } catch (e) {
             console.error('Failed to save image to firestore', e);
@@ -611,16 +628,8 @@ export default function ScriptPage() {
     setShots(newShots);
   };
 
-  const handleCopyKey = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (!apiKey) return;
-    navigator.clipboard.writeText(apiKey);
-    setIsCopied(true);
-    setTimeout(() => setIsCopied(false), 1500);
-  };
-
   return (
-    <div className="flex flex-col lg:flex-row lg:h-full bg-slate-50 text-slate-900 lg:overflow-hidden font-sans w-full min-w-0 box-border relative">
+    <div className="flex flex-col lg:flex-row lg:h-full bg-[#F9FAFB] text-foreground lg:overflow-hidden font-sans w-full min-w-0 box-border relative">
       {/* Generation error toast */}
       {generationToast && (
         <div className="fixed bottom-5 left-1/2 -translate-x-1/2 z-[9999] max-w-sm w-[calc(100%-2rem)] flex items-start gap-3 bg-red-600 text-white text-sm px-4 py-3 rounded-xl shadow-xl">
@@ -728,17 +737,16 @@ export default function ScriptPage() {
       </div>
 
       {/* Left Pane: Shots Accordion */}
-      <div className="flex-1 min-w-0 h-auto lg:h-full lg:overflow-y-auto overflow-x-hidden border-b lg:border-b-0 lg:border-r border-slate-200 p-4 lg:p-6 lg:pr-6 box-border">
-        <div className="sticky top-0 z-20 bg-slate-50 -mx-4 lg:-mx-6 px-4 lg:px-6 pt-4 lg:pt-6 pb-4 border-b border-slate-200 mb-6 flex justify-between items-center">
-          <h1 className="text-xl lg:text-2xl font-bold text-slate-900 leading-none">
-            Video Script Editor
-          </h1>
-          <button
-            onClick={createThread}
-            className="text-sm px-3 py-1.5 bg-violet-600 hover:bg-violet-700 text-white rounded-lg transition-colors font-medium flex items-center gap-1.5 shadow-sm"
-          >
-            + Create New
-          </button>
+      <div className="flex-1 min-w-0 h-auto lg:h-full lg:overflow-y-auto overflow-x-hidden border-b lg:border-b-0 lg:border-r border-border p-4 lg:p-6 lg:pr-6 box-border">
+        <div className="-mx-4 lg:-mx-6 mb-6">
+          <TopHeader
+            title="Video Script Editor"
+            actions={
+              <Button onClick={createThread} size="sm">
+                + Create New
+              </Button>
+            }
+          />
         </div>
 
         {/* Globals Section */}
@@ -1683,79 +1691,6 @@ export default function ScriptPage() {
 
           {isSettingsExpanded && (
             <div className="space-y-4">
-              <div className="flex items-center justify-between bg-white border border-slate-200 rounded-lg p-3 shadow-sm">
-                <div className="flex items-center gap-3">
-                  <span className="text-xl leading-none">🔑</span>
-                  <div className="flex flex-col">
-                    <span className="text-[11px] font-semibold text-slate-700 uppercase tracking-wider flex items-center gap-1">
-                      Veo API Key
-                      {!apiKey && (
-                        <span className="text-red-500 text-sm leading-none">
-                          *
-                        </span>
-                      )}
-                    </span>
-                    <div className="flex items-center gap-1">
-                      <span className="text-[11px] text-slate-500">
-                        {apiKey
-                          ? 'Key is configured'
-                          : 'Required for generation'}
-                      </span>
-                      {apiKey && (
-                        <button
-                          onClick={handleCopyKey}
-                          className="ml-1 text-slate-400 hover:text-slate-600 transition-colors"
-                          title="Copy API Key"
-                        >
-                          {isCopied ? (
-                            <svg
-                              className="w-3 h-3 text-emerald-500"
-                              fill="none"
-                              viewBox="0 0 24 24"
-                              stroke="currentColor"
-                              strokeWidth={3}
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                            >
-                              <polyline points="20 6 9 17 4 12"></polyline>
-                            </svg>
-                          ) : (
-                            <svg
-                              className="w-3 h-3"
-                              fill="none"
-                              viewBox="0 0 24 24"
-                              stroke="currentColor"
-                              strokeWidth={2}
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                            >
-                              <rect
-                                x="9"
-                                y="9"
-                                width="13"
-                                height="13"
-                                rx="2"
-                                ry="2"
-                              ></rect>
-                              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-                            </svg>
-                          )}
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                </div>
-                <button
-                  onClick={() => {
-                    setTempApiKey(apiKey);
-                    setIsApiPopupOpen(true);
-                  }}
-                  className="px-3 py-1.5 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-md text-xs font-medium text-slate-700 transition-colors flex items-center gap-1.5"
-                >
-                  {apiKey ? 'Edit ✏️' : 'Set Key'}
-                </button>
-              </div>
-
               <div>
                 {model === 'veo-3.1-lite-generate-preview' && (
                   <div className="mb-2 flex items-start gap-2 rounded-lg bg-blue-50 border border-blue-200 px-3 py-2 text-xs text-blue-700">
@@ -1796,10 +1731,23 @@ export default function ScriptPage() {
                   onChange={(e) => setModel(e.target.value)}
                   className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-900 shadow-sm focus:outline-none focus:border-violet-500 focus:ring-1 focus:ring-violet-500"
                 >
-                  <option value="veo-3.1-fast-generate-preview">
-                    Veo 3.1 Fast
-                  </option>
-                  <option value="veo-3.1-generate-preview">Veo 3.1 Pro</option>
+                  {providerConfig.activeProvider === 'vertex' ? (
+                    <>
+                      <option value="veo-3.1-fast-generate-001">
+                        Veo 3.1 Fast
+                      </option>
+                      <option value="veo-3.1-generate-001">Veo 3.1 Pro</option>
+                    </>
+                  ) : (
+                    <>
+                      <option value="veo-3.1-fast-generate-preview">
+                        Veo 3.1 Fast
+                      </option>
+                      <option value="veo-3.1-generate-preview">
+                        Veo 3.1 Pro
+                      </option>
+                    </>
+                  )}
                   <option value="veo-3.1-lite-generate-preview">
                     Veo 3.1 Lite
                   </option>
@@ -1814,9 +1762,52 @@ export default function ScriptPage() {
                     Grok (Beta)
                   </option>
                 </select>
+                {providerConfig.activeProvider === 'vertex' &&
+                  (model === 'kling-o3-image-to-video' ||
+                    model === 'seedance-2.0-reference-to-video' ||
+                    model === 'grok-imagine-image-to-video-beta' ||
+                    model === 'seedance-1.5-pro') && (
+                    <div className="mt-2 flex items-start gap-2 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-700">
+                      <span className="shrink-0 mt-0.5">ℹ</span>
+                      <span>
+                        This model uses Evolink and ignores the Vertex AI
+                        toggle.
+                      </span>
+                    </div>
+                  )}
               </div>
 
-              <div className="flex gap-2">
+              {/* Cost & Duration Estimate */}
+              {(() => {
+                const selectedCount = shots.filter((s) => s.selected).length;
+                if (selectedCount === 0) return null;
+                const cost = selectedCount * 0.15; // Example cost calculation
+                const duration = selectedCount * 2; // ~2 mins per shot
+                return (
+                  <div className="flex items-center justify-between rounded-lg bg-slate-50 border border-slate-200 px-4 py-3 text-sm">
+                    <div>
+                      <span className="font-medium text-slate-700">
+                        Generation Estimate
+                      </span>
+                      <span className="ml-2 text-slate-500 text-xs">
+                        {selectedCount} shot{selectedCount > 1 ? 's' : ''}{' '}
+                        selected
+                      </span>
+                    </div>
+                    <div className="text-right">
+                      <div className="font-semibold text-slate-800">
+                        ~${cost.toFixed(2)}
+                      </div>
+                      <div className="text-xs text-slate-500">
+                        ~{duration} mins
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              <div className="flex items-center gap-4 mt-2">
+                <ProviderStatus />
                 <button
                   disabled={isGenerating || !shots.some((s) => s.selected)}
                   onClick={async () => {
@@ -1826,14 +1817,25 @@ export default function ScriptPage() {
 
                     if (selectedIndices.length === 0)
                       return alert('Select at least one shot.');
-                    if (
-                      !apiKey &&
-                      model !== 'kling-o3-image-to-video' &&
-                      model !== 'seedance-2.0-reference-to-video' &&
-                      model !== 'grok-imagine-image-to-video-beta' &&
-                      model !== 'seedance-1.5-pro'
-                    )
-                      return alert('Please enter your API key.');
+                    const isEvolinkModel =
+                      model === 'kling-o3-image-to-video' ||
+                      model === 'seedance-2.0-reference-to-video' ||
+                      model === 'grok-imagine-image-to-video-beta' ||
+                      model === 'seedance-1.5-pro';
+                    if (!isEvolinkModel) {
+                      if (
+                        providerConfig.activeProvider === 'vertex' &&
+                        !providerConfig.vertexCredentials.serviceAccountKey
+                      )
+                        return alert(
+                          'Please enter your Vertex AI service account key.'
+                        );
+                      if (
+                        providerConfig.activeProvider !== 'vertex' &&
+                        !providerConfig.geminiApiKey
+                      )
+                        return alert('Please enter your Gemini API key.');
+                    }
 
                     setIsGenerating(true);
                     const controller = new AbortController();
@@ -1911,7 +1913,7 @@ export default function ScriptPage() {
                             modelName: model,
                             duration: shot.duration,
                             resolution: shot.resolution,
-                            apiKey,
+                            apiKey: providerConfig.geminiApiKey,
                             shotNumber: shot.shot_number,
                             existingCount: existingCount,
                           };
@@ -1954,16 +1956,48 @@ export default function ScriptPage() {
                               quality: shot.resolution,
                               aspect_ratio: shot.aspectRatio || '16:9',
                             };
+                          } else if (
+                            providerConfig.activeProvider === 'vertex'
+                          ) {
+                            const vertexBase = {
+                              prompt: finalPrompt,
+                              modelName: model,
+                              duration: shot.duration,
+                              resolution: shot.resolution,
+                              aspectRatio: shot.aspectRatio || '9:16',
+                              vertexKey:
+                                providerConfig.vertexCredentials
+                                  .serviceAccountKey,
+                              vertexLocation:
+                                providerConfig.vertexCredentials.region,
+                              shotNumber: shot.shot_number,
+                              existingCount,
+                            };
+                            if (resolvedImages.length === 0) {
+                              route = '/api/script/generate-video/vertex/text';
+                              body = vertexBase;
+                            } else if (isLite) {
+                              route =
+                                '/api/script/generate-video/vertex/image-direct';
+                              body = {
+                                ...vertexBase,
+                                image: resolvedImages[0],
+                              };
+                            } else {
+                              route =
+                                '/api/script/generate-video/vertex/image-refs';
+                              body = {
+                                ...vertexBase,
+                                referenceImages: resolvedImages,
+                              };
+                            }
                           } else if (resolvedImages.length === 0) {
                             route = '/api/script/generate-video/text';
                             body = base;
                           } else if (isLite) {
-                            // Lite only supports image-direct (no refs API)
                             route = '/api/script/generate-video/image-direct';
                             body = { ...base, image: resolvedImages[0] };
                           } else {
-                            // Fast/Pro: always use refs even with 1 image —
-                            // refs uses image as creative reference, prompt drives the scene
                             route = '/api/script/generate-video/image-refs';
                             body = { ...base, referenceImages: resolvedImages };
                           }
@@ -1995,7 +2029,7 @@ export default function ScriptPage() {
                               `shot_${shot.shot_number}.mp4`;
                             try {
                               const uploadRes = await fetch(
-                                `/api/upload?filename=${activeThreadId}_${filename}`,
+                                `/api/upload?filename=${encodeURIComponent(filename)}&scriptId=${encodeURIComponent(activeThreadId)}&shotId=${encodeURIComponent(shot.id ?? `shot_${shot.shot_number}`)}&version=${existingCount + 1}`,
                                 {
                                   method: 'POST',
                                   body: blob,
@@ -2004,34 +2038,22 @@ export default function ScriptPage() {
                               const uploadData = await uploadRes.json();
                               if (uploadData?.url) {
                                 videoUrl = uploadData.url;
-                                const docId = `${activeThreadId}_${filename.replace(/\./g, '_')}`;
-                                const videoRef = doc(
-                                  db,
-                                  'generatedVideos',
-                                  docId
+                                const videoRef = await addDoc(
+                                  collection(db, 'generatedVideos'),
+                                  {
+                                    scriptId: activeThreadId,
+                                    userId: user?.uid,
+                                    shotId: shot.id,
+                                    blobUrl: videoUrl,
+                                    createdAt: serverTimestamp(),
+                                    updatedAt: serverTimestamp(),
+                                  }
                                 );
-                                const videoSnap = await getDoc(videoRef);
-
-                                const videoData: any = {
-                                  scriptId: activeThreadId,
-                                  userId: user?.uid,
-                                  shotId: shot.id,
-                                  blobUrl: videoUrl,
-                                  updatedAt: serverTimestamp(),
-                                };
-
-                                if (!videoSnap.exists()) {
-                                  videoData.createdAt = serverTimestamp();
-                                }
-
-                                await setDoc(videoRef, videoData, {
-                                  merge: true,
-                                });
 
                                 setGeneratedVideos((prev) => [
                                   ...prev,
                                   {
-                                    id: docId,
+                                    id: videoRef.id,
                                     blobUrl: videoUrl!,
                                     shotId: shot.id!,
                                     shotNumber: shot.shot_number,
@@ -2314,11 +2336,15 @@ export default function ScriptPage() {
                           </span>
                           <div className="flex items-center gap-2">
                             <button
-                              onClick={() => {
+                              onClick={async () => {
+                                const res = await fetch(video.blobUrl);
+                                const blob = await res.blob();
+                                const url = URL.createObjectURL(blob);
                                 const a = document.createElement('a');
-                                a.href = video.blobUrl;
+                                a.href = url;
                                 a.download = `Shot_${displayShotNumber}${versionLabel}.mp4`;
                                 a.click();
+                                URL.revokeObjectURL(url);
                               }}
                               className="text-xs text-violet-600 hover:text-violet-700 font-medium"
                             >
@@ -2342,31 +2368,41 @@ export default function ScriptPage() {
                           </div>
                         </div>
                         <div
-                          className="relative w-full rounded-lg bg-slate-900 aspect-video cursor-pointer overflow-hidden group"
-                          onClick={() => setPlayingVideoUrl(video.blobUrl)}
+                          className={`relative w-full rounded-lg bg-black aspect-video overflow-hidden group ${
+                            isRecent ? 'ring-2 ring-violet-500' : ''
+                          }`}
                         >
                           <video
                             src={video.blobUrl}
+                            controls
+                            controlsList="nodownload"
                             preload="metadata"
-                            className="w-full h-full object-cover pointer-events-none"
+                            className="w-full h-full object-contain"
                           />
-                          <div
-                            className={`absolute inset-0 transition-colors flex items-center justify-center ${
-                              isRecent
-                                ? 'bg-slate-900/30'
-                                : 'bg-slate-900/10 group-hover:bg-slate-900/30'
-                            }`}
+                          <button
+                            onClick={() =>
+                              setPlayingVideo({
+                                url: video.blobUrl,
+                                filename: `Shot_${displayShotNumber}${versionLabel}.mp4`,
+                              })
+                            }
+                            className="absolute top-2 right-2 bg-black/60 text-white rounded-md p-1.5 opacity-0 group-hover:opacity-100 transition-opacity backdrop-blur-sm"
+                            title="Fullscreen"
                           >
-                            <div
-                              className={`w-10 h-10 bg-white/90 backdrop-blur rounded-full flex items-center justify-center text-slate-900 pl-1 shadow-md transition-transform ${
-                                isRecent
-                                  ? 'scale-110'
-                                  : 'transform group-hover:scale-110'
-                              }`}
+                            <svg
+                              className="w-4 h-4"
+                              fill="none"
+                              viewBox="0 0 24 24"
+                              stroke="currentColor"
+                              strokeWidth={2}
                             >
-                              ▶
-                            </div>
-                          </div>
+                              <path
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"
+                              />
+                            </svg>
+                          </button>
                         </div>
                       </div>
                     );
@@ -2400,18 +2436,36 @@ export default function ScriptPage() {
       </div>
 
       {/* Fullscreen Video Modal */}
-      {playingVideoUrl && (
+      {playingVideo && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 p-4">
           <div className="relative w-full max-w-5xl">
-            <button
-              onClick={() => setPlayingVideoUrl(null)}
-              className="absolute -top-12 right-0 text-white hover:text-neutral-300 text-3xl font-light"
-            >
-              ×
-            </button>
+            <div className="absolute -top-12 right-0 flex items-center gap-4">
+              <button
+                onClick={async () => {
+                  const res = await fetch(playingVideo.url);
+                  const blob = await res.blob();
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement('a');
+                  a.href = url;
+                  a.download = playingVideo.filename;
+                  a.click();
+                  URL.revokeObjectURL(url);
+                }}
+                className="text-white hover:text-neutral-300 text-sm font-medium"
+              >
+                Download
+              </button>
+              <button
+                onClick={() => setPlayingVideo(null)}
+                className="text-white hover:text-neutral-300 text-3xl font-light"
+              >
+                ×
+              </button>
+            </div>
             <video
-              src={playingVideoUrl}
+              src={playingVideo.url}
               controls
+              controlsList="nodownload"
               autoPlay
               className="w-full rounded-lg bg-black shadow-2xl max-h-[80vh] object-contain"
             />
@@ -2552,14 +2606,7 @@ export default function ScriptPage() {
             }
 
             try {
-              const batch = writeBatch(db);
-              batch.delete(
-                doc(db, 'imageLibraries', user!.uid, 'images', imageToDelete)
-              );
-              batch.update(doc(db, 'imageLibraries', user!.uid), {
-                updatedAt: serverTimestamp(),
-              });
-              await batch.commit();
+              await deleteDoc(doc(db, 'imageLibrary', imageToDelete));
             } catch (e) {
               console.error('Failed to delete image from firestore', e);
             }
@@ -2734,59 +2781,6 @@ export default function ScriptPage() {
                   Attach Selected
                 </button>
               </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* API Key Modal */}
-      {isApiPopupOpen && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm">
-          <div className="bg-white rounded-xl shadow-xl w-full max-w-md flex flex-col">
-            <div className="p-4 border-b border-slate-100 flex items-center justify-between">
-              <h3 className="font-bold text-slate-800 flex items-center gap-2">
-                <span className="text-xl">🔑</span> Veo API Key
-              </h3>
-              <button
-                onClick={() => setIsApiPopupOpen(false)}
-                className="text-slate-400 hover:text-slate-600"
-              >
-                ×
-              </button>
-            </div>
-            <div className="p-6">
-              <label className="field-label">
-                AI Studio Key <span className="text-red-500">*</span>
-              </label>
-              <input
-                type="password"
-                value={tempApiKey}
-                onChange={(e) => setTempApiKey(e.target.value)}
-                placeholder="Paste your API key here..."
-                className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2.5 text-sm text-slate-900 focus:outline-none focus:border-violet-500 focus:ring-1 focus:ring-violet-500"
-                autoFocus
-              />
-              <p className="mt-3 text-[11px] text-slate-500 leading-relaxed">
-                Your API key is stored locally in your browser and never sent to
-                our servers. It is required to generate videos.
-              </p>
-            </div>
-            <div className="p-4 border-t border-slate-100 bg-slate-50 flex justify-end gap-2 rounded-b-xl">
-              <button
-                onClick={() => setIsApiPopupOpen(false)}
-                className="px-4 py-2 text-slate-600 hover:text-slate-800 text-sm font-medium transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => {
-                  setApiKey(tempApiKey);
-                  setIsApiPopupOpen(false);
-                }}
-                className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white text-sm font-medium rounded-lg transition-colors shadow-sm"
-              >
-                Save Key
-              </button>
             </div>
           </div>
         </div>

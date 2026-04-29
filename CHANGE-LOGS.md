@@ -1,4 +1,109 @@
+## 🗓️ **2026-04-29**
+
+---
+
+### ✨ Features
+
+---
+
+> ### Secure API Key UI in Settings
+>
+> - **What changed:** Replaced the plain password inputs for Gemini API key and Vertex Configuration in the Settings page with clickable masked buttons. Clicking these buttons now prompts the user to re-enter their account password for authentication before displaying the actual keys in an editable, copyable dialog.
+> - **Why:** Enhances security for sensitive API credentials by requiring password re-authentication before viewing or modifying them.
+> - **Files:**
+>   - `src/app/settings/page.tsx`
+
+---
+
+### 💅 Styling and UI Improvements
+
+---
+
+> ### Trust and Onboarding Enhancements
+>
+> - **What changed:** Added a usage & quota dashboard in the App Sidebar, an onboarding flow (3-slide modal) for new users on the Avatar creation page, and improved error state/toast designs. Also added a centralized Settings page where users can update their profile (Email, Display Name, Password) and manage secretive API Provider settings.
+> - **Why:** Increases user trust by displaying account usage quotas, provides clear onboarding for cold starts, and ensures API/generation failures are handled gracefully with commercial-grade UI. Securely isolates API keys to the Settings page.
+> - **Files:**
+>   - `src/components/AppSidebar.tsx`
+>   - `src/app/avatar/new/page.tsx`
+>   - `src/app/script/page.tsx`
+>   - `src/app/settings/page.tsx`
+
+---
+
+> ### Redesign Avatar creation page
+>
+> - **What changed:** Refactored the avatar creation page to use a 60/40 split layout instead of a step wizard, added prompt chips, implemented a version history carousel with lightbox zoom, and removed inline API key warnings.
+> - **Why:** Improves UX by giving input forms breathing room, eliminating writer's block with prompt starters, showing generation history, and moving technical API key configurations out of the core user flow.
+> - **Files:**
+>   - `src/app/avatar/new/page.tsx`
+
+---
+
+### 🐛 Fixes
+
+---
+
+> ### Fix image breaking on shot after upload
+>
+> - **What changed:** Updated `addImagesToLibrary` to also update the `shots` state array, replacing temporary image reference IDs with the newly generated Firestore document IDs once the upload is completed.
+> - **Why:** When an image is uploaded directly to a shot, the shot is assigned a temporary random ID which was breaking once the upload completed because only the global images library state was being updated with the permanent ID.
+> - **Files:**
+>   - `src/app/script/page.tsx`
+
+---
+
+## 🗓️ **2026-04-28**
+
+---
+
+### 🐛 Fixes
+
+---
+
+> ### Update Vertex AI Veo model names
+>
+> - **What changed:** Kept Gemini API routes using `veo-3.1-fast-generate-preview` / `veo-3.1-generate-preview` while updating Vertex API routes to use the new `veo-3.1-fast-generate-001` / `veo-3.1-generate-001` model names. The UI model dropdown now dynamically swaps the available options based on whether Vertex AI or Gemini API is selected in the provider toggle.
+> - **Why:** Aligning with the official model names for Vertex AI, while preserving the existing model names for Gemini.
+> - **Files:**
+>   - `src/services/vertex-video.ts`
+>   - `src/app/script/page.tsx`
+
+---
+
+## 🗓️ **2026-04-26**
+
+---
+
+### ✨ Features
+
+---
+
+> ### Vertex AI video generation support
+>
+> - **What changed:** Added a Gemini / Vertex AI provider toggle in Settings. When Vertex AI is selected, a "Set Key" popup accepts a service account JSON and a GCS region (default `us-central1`). Both are stored per-script in Firestore. Selecting shots and generating routes to a new `/api/script/generate-video/vertex` route backed by `src/services/vertex-video.ts`. The service uses `@google/genai` with `vertexai: true` and passes explicit service account credentials via `googleAuthOptions`. It handles both inline `videoBytes` responses and GCS URI responses (downloading the latter via a self-signed JWT + GCS HTTP API — no new npm dependencies). Kling / Seedance / Grok models always route through Evolink regardless of the toggle.
+> - **Why:** User wanted to use their GCP service account to generate videos via Vertex AI instead of the Google AI Studio API key.
+> - **Files:**
+>   - `src/services/vertex-video.ts` _(new)_
+>   - `src/app/api/script/generate-video/vertex/route.ts` _(new)_
+>   - `src/app/script/page.tsx`
+
+---
+
 ## 🗓️ **2026-04-25**
+
+---
+
+### 🐛 Fixes
+
+---
+
+> ### All Firestore doc IDs now auto-generated — no custom names anywhere
+>
+> - **What changed:** Removed every custom Firestore document ID from the codebase. Scripts now created with `addDoc` (was `t_${Date.now()}`). Globals subcollection now uses Firestore auto-IDs tracked via `id?` field in state (was name-derived slugs). Shot `idUpdates` now applied to React state after batch commit so future syncs correctly identify existing vs new shots. Image library restructured from `imageLibraries/{uid}/images/{clientRandom}` to a flat `imageLibrary/{autoId}` collection with a `userId` field; images created with `addDoc` and local state updated with the returned Firestore ID.
+> - **Why:** User required all Firestore doc IDs to be default-generated; any custom ID violates the data architecture contract.
+> - **Files:**
+>   - `src/app/script/page.tsx`
 
 ---
 
@@ -102,6 +207,17 @@
 
 ---
 
+> ### Firebase Client SDK — Auth & Firestore Initialised
+>
+> - **What changed:** Added `src/lib/firebase.ts` — a singleton client-side Firebase initialiser that reads config from `NEXT_PUBLIC_FIREBASE_*` env vars and exports `db` (Firestore), `auth` (Firebase Auth), and `analyticsPromise` (lazy, browser-only Analytics guarded against SSR). Added all seven `NEXT_PUBLIC_FIREBASE_*` variables to both `.env` and `.env_example`. The existing `firebase-admin.ts` is unchanged and remains the server-only path for API routes.
+> - **Why:** Enables client-side Firebase Auth (email/password) and direct Firestore reads/writes from React components, while keeping the Admin SDK isolated to server routes where privileged access is needed.
+> - **Files:**
+>   - `src/lib/firebase.ts` _(new)_
+>   - `.env`
+>   - `.env_example`
+
+---
+
 ### 🐛 Fixes
 
 ---
@@ -140,6 +256,25 @@
 > - **Why:** The route was calling a non-existent path, silently failing to send Telegram notifications at the end of the automated pipeline.
 > - **Files:**
 >   - `src/app/api/pipeline/generate-ideas/route.ts`
+
+---
+
+> ### Video Upload — Unique Vercel Blob Path per Script × Shot × Version
+>
+> - **What changed:** `POST /api/upload` now accepts `scriptId` and `shotId` query params and writes to `Generated Videos/{scriptId}_{shotId}_v{n}.mp4`. The route computes the next version number server-side by listing existing blobs under that prefix via `list({ prefix })` — so the version is always derived from actual Vercel Blob state, not the client's potentially-stale `generatedVideos` count. The route falls back to the plain filename when params are absent.
+> - **Why:** Client-side `existingCount` can be 0 when Firestore hasn't finished loading, causing every regeneration to produce the same `_v1` path and Vercel Blob to reject it with "blob already exists". Server-side counting is the reliable source of truth.
+> - **Files:**
+>   - `src/app/api/upload/route.ts`
+>   - `src/app/script/page.tsx`
+
+---
+
+> ### Video Download — Fetch-then-Download to Bypass Cross-Origin Restriction
+>
+> - **What changed:** The Download button on generated videos now fetches the Vercel Blob URL as a `Response`, converts it to a local `blob:` URL via `URL.createObjectURL`, triggers the download with the `<a download>` attribute, then immediately revokes the temporary URL.
+> - **Why:** The `download` attribute on `<a>` is silently ignored by browsers for cross-origin URLs (Vercel Blob is a different domain), causing the file to open in a new tab instead of downloading. Fetching the bytes first makes the URL same-origin and forces a file save.
+> - **Files:**
+>   - `src/app/script/page.tsx`
 
 ---
 

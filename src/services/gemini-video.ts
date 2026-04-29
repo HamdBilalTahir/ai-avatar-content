@@ -82,6 +82,7 @@ function logConfig(
   console.log(`🎥 Preparing to generate: ${outputName}`);
   console.log(`==================================================`);
   console.log(`📦 Generation Config:`);
+  console.log(`  - Provider: Gemini API`);
   console.log(`  - Mode: ${mode}`);
   console.log(`  - Model: ${modelName}`);
   console.log(`  - Duration: ${duration}s`);
