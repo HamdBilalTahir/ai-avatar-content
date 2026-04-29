@@ -8,7 +8,7 @@
 
 > ### Secure API Key UI in Settings
 >
-> - **What changed:** Replaced the plain password inputs for Gemini API key and Vertex Configuration in the Settings page with clickable masked buttons. Clicking these buttons now prompts the user to re-enter their account password for authentication before displaying the actual keys in an editable, copyable dialog.
+> - **What changed:** Replaced the plain password inputs for Gemini API key and Vertex Configuration in the Settings page with clickable masked buttons. ClickiAng these buttons now prompts the user to re-enter their account password for authentication before displaying the actual keys in an editable, copyable dialog.
 > - **Why:** Enhances security for sensitive API credentials by requiring password re-authentication before viewing or modifying them.
 > - **Files:**
 >   - `src/app/settings/page.tsx`
