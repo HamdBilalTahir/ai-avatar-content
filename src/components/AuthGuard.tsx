@@ -1,10 +1,10 @@
 'use client';
 
-import React, { useEffect } from 'react';
+import React, { Suspense, useEffect } from 'react';
 import { useRouter, usePathname, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/lib/AuthContext';
 
-export default function AuthGuard({ children }: { children: React.ReactNode }) {
+function AuthGuardInner({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
   const router = useRouter();
   const pathname = usePathname();
@@ -29,16 +29,9 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
   }, [user, loading, router, pathname, searchParams]);
 
   if (loading) {
-    return (
-      <div className="flex-1 flex items-center justify-center h-full">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
-      </div>
-    );
+    return <AuthSpinner />;
   }
 
-  // We still render children if loading is false.
-  // If not authenticated and on a protected route, useEffect will trigger a redirect,
-  // but we should avoid rendering protected content briefly.
   const isAuthRoute =
     pathname === '/login' ||
     pathname === '/signup' ||
@@ -48,4 +41,20 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
   }
 
   return <>{children}</>;
+}
+
+function AuthSpinner() {
+  return (
+    <div className="flex-1 flex items-center justify-center h-full">
+      <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
+    </div>
+  );
+}
+
+export default function AuthGuard({ children }: { children: React.ReactNode }) {
+  return (
+    <Suspense fallback={<AuthSpinner />}>
+      <AuthGuardInner>{children}</AuthGuardInner>
+    </Suspense>
+  );
 }
