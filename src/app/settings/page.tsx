@@ -144,11 +144,7 @@ export default function SettingsPage() {
 
   return (
     <div className="min-h-screen bg-[#F9FAFB] text-foreground flex flex-col">
-      <TopHeader
-        title="Settings"
-        description="Manage your profile and API configurations."
-        breadcrumbs={[{ label: 'Settings' }]}
-      />
+      <TopHeader breadcrumbs={[{ label: 'Settings' }]} />
 
       <div className="flex-1 w-full max-w-4xl mx-auto p-6 md:p-8 space-y-8">
         {message && (
@@ -165,12 +161,10 @@ export default function SettingsPage() {
 
         {/* User Profile */}
         <section className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
-          <h2 className="text-xl font-bold text-slate-800 mb-4">
-            User Profile
-          </h2>
+          <h2 className="type-level-1 text-slate-800 mb-4">User Profile</h2>
           <div className="space-y-4 max-w-md">
             <div>
-              <Label className="text-sm font-semibold text-slate-700">
+              <Label className="type-level-2 text-slate-700">
                 Email Address
               </Label>
               <Input
@@ -183,7 +177,7 @@ export default function SettingsPage() {
               />
             </div>
             <div>
-              <Label className="text-sm font-semibold text-slate-700">
+              <Label className="type-level-2 text-slate-700">
                 Display Name
               </Label>
               <Input
@@ -204,12 +198,10 @@ export default function SettingsPage() {
 
           <div className="h-px bg-slate-100 max-w-md my-6" />
 
-          <h3 className="text-lg font-bold text-slate-800 mb-4">
-            Change Password
-          </h3>
+          <h3 className="type-level-1 text-slate-800 mb-4">Change Password</h3>
           <div className="space-y-4 max-w-md">
             <div>
-              <Label className="text-sm font-semibold text-slate-700">
+              <Label className="type-level-2 text-slate-700">
                 New Password
               </Label>
               <Input
@@ -219,7 +211,7 @@ export default function SettingsPage() {
               />
             </div>
             <div>
-              <Label className="text-sm font-semibold text-slate-700">
+              <Label className="type-level-2 text-slate-700">
                 Confirm New Password
               </Label>
               <Input
@@ -242,14 +234,14 @@ export default function SettingsPage() {
 
         {/* API Configurations */}
         <section className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
-          <h2 className="text-xl font-bold text-slate-800 mb-4">
+          <h2 className="type-level-1 text-slate-800 mb-4">
             AI Provider Settings
           </h2>
 
           <div className="space-y-6">
             {/* Active Provider Selection */}
             <div>
-              <Label className="text-sm font-semibold text-slate-700 mb-2 block">
+              <Label className="type-level-2 text-slate-700 mb-2 block">
                 Active Provider
               </Label>
               <div className="flex gap-3 max-w-md">
@@ -309,7 +301,7 @@ export default function SettingsPage() {
                       : 'No API Key configured'}
                   </span>
                 </div>
-                <span className="text-sm font-semibold text-blue-600">
+                <span className="type-level-2 text-blue-600">
                   View / Edit Key
                 </span>
               </button>
@@ -334,7 +326,7 @@ export default function SettingsPage() {
                       : 'No Configuration set'}
                   </span>
                 </div>
-                <span className="text-sm font-semibold text-blue-600">
+                <span className="type-level-2 text-blue-600">
                   View / Edit Config
                 </span>
               </button>
@@ -365,7 +357,9 @@ export default function SettingsPage() {
                   if (e.key === 'Enter') handleVerifyPassword();
                 }}
               />
-              {authError && <p className="text-sm text-red-500">{authError}</p>}
+              {authError && (
+                <p className="type-level-2 text-red-500">{authError}</p>
+              )}
             </div>
           </div>
           <DialogFooter>

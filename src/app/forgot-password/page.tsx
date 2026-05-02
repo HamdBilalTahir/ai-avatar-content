@@ -41,7 +41,7 @@ export default function ForgotPasswordPage() {
           <h1 className="text-2xl font-bold tracking-tight text-foreground">
             Reset Password
           </h1>
-          <p className="text-sm text-muted-foreground">
+          <p className="type-level-2 text-muted-foreground">
             Enter your email to reset your password
           </p>
         </div>
@@ -49,12 +49,12 @@ export default function ForgotPasswordPage() {
         <Card>
           <CardContent className="pt-6">
             {error && (
-              <div className="mb-4 rounded-md bg-destructive/15 p-3 text-sm text-destructive font-medium text-center">
+              <div className="mb-4 rounded-md bg-destructive/15 p-3 type-level-2 text-destructive font-medium text-center">
                 {error}
               </div>
             )}
             {message && (
-              <div className="mb-4 rounded-md bg-emerald-50 border border-emerald-200 p-3 text-sm text-emerald-700 font-medium text-center">
+              <div className="mb-4 rounded-md bg-emerald-50 border border-emerald-200 p-3 type-level-2 text-emerald-700 font-medium text-center">
                 {message}
               </div>
             )}
@@ -77,7 +77,7 @@ export default function ForgotPasswordPage() {
             </form>
           </CardContent>
           <CardFooter className="justify-center border-t border-border pt-6 pb-6">
-            <p className="text-sm text-muted-foreground">
+            <p className="type-level-2 text-muted-foreground">
               Remember your password?{' '}
               <Link
                 href="/login"

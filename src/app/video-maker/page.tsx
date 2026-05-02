@@ -1,6 +1,6 @@
 'use client';
-import { useState, useEffect } from 'react';
-import { EditorProvider, useEditor, selectTotalDuration } from './store';
+import React, { useState, useEffect } from 'react';
+import { EditorProvider, useEditor } from './store';
 import ProjectsPanel from './_components/ProjectsPanel';
 import MediaPanel from './_components/MediaPanel';
 import Preview from './_components/Preview';
@@ -95,12 +95,12 @@ function ExportButton() {
   return (
     <div className="flex items-center gap-2">
       {exportError && (
-        <span className="text-xs text-red-500">{exportError}</span>
+        <span className="type-level-3 text-red-500">{exportError}</span>
       )}
       <button
         onClick={handleExport}
         disabled={!activeProject || exporting}
-        className="flex items-center gap-2 rounded-lg bg-emerald-600 px-5 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-emerald-700 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
+        className="flex items-center gap-2 rounded-lg bg-emerald-600 px-5 py-2.5 type-level-2 text-white shadow-sm transition hover:bg-emerald-700 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
       >
         {exporting ? (
           <>
@@ -191,7 +191,7 @@ function VideoMakerInner() {
           {activeProject && (
             <>
               <span className="text-slate-300">›</span>
-              <span className="text-sm text-slate-500">
+              <span className="type-level-2 text-slate-500">
                 {activeProject.name}
               </span>
             </>
@@ -215,7 +215,7 @@ function VideoMakerInner() {
               <button
                 key={t.key}
                 onClick={() => setSidebarTab(t.key)}
-                className={`flex-1 py-3 text-sm font-semibold transition ${
+                className={`flex-1 py-3 type-level-2 transition ${
                   sidebarTab === t.key
                     ? 'border-b-2 border-violet-600 text-violet-700'
                     : 'text-slate-500 hover:text-slate-700'

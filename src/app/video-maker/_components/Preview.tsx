@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useRef, useCallback } from 'react';
+import React, { useEffect, useRef, useCallback } from 'react';
 import { useEditor, selectTotalDuration } from '../store';
 import { effectiveDuration } from '../types';
 import type { Clip, Track } from '../types';
@@ -283,7 +283,7 @@ export default function Preview() {
             >
               <path d="M15 10l4.553-2.277A1 1 0 0 1 21 8.693v6.614a1 1 0 0 1-1.447.916L15 14v-4zM3 8a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8z" />
             </svg>
-            <p className="text-xs opacity-40">
+            <p className="type-level-3 opacity-40">
               Add a video clip to the timeline
             </p>
           </div>
@@ -292,7 +292,7 @@ export default function Preview() {
 
       {/* Controls */}
       <div className="flex w-full max-w-2xl items-center gap-3">
-        <span className="w-12 text-right font-mono text-sm text-slate-500 tabular-nums">
+        <span className="w-12 text-right font-mono type-level-2 text-slate-500 tabular-nums">
           {formatTime(state.playhead)}
         </span>
 
@@ -310,7 +310,7 @@ export default function Preview() {
           />
         </div>
 
-        <span className="w-12 font-mono text-sm text-slate-400 tabular-nums">
+        <span className="w-12 font-mono type-level-2 text-slate-400 tabular-nums">
           {formatTime(totalDuration)}
         </span>
       </div>

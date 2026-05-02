@@ -23,7 +23,7 @@ export default function ProviderStatus() {
         className="w-2 h-2 rounded-full flex-shrink-0"
         style={{ backgroundColor: dotColor }}
       />
-      <span className="text-xs text-slate-500 font-medium whitespace-nowrap">
+      <span className="type-level-3 text-slate-500 font-medium whitespace-nowrap">
         {label}
       </span>
     </div>

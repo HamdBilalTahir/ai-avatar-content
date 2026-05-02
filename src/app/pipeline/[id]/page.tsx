@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import type { PipelineJob, PipelineStatusResponse } from '@/lib/types';
 
@@ -99,7 +99,6 @@ export default function PipelinePage() {
     fetchStatus();
     intervalRef.current = setInterval(fetchStatus, 3000);
     return () => stopPolling();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
   // ── Loading splash ──────────────────────────────────────────────────────────
@@ -108,7 +107,7 @@ export default function PipelinePage() {
       <PageShell>
         <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4">
           <Spinner large />
-          <p className="text-slate-400 text-sm">Loading your pipeline…</p>
+          <p className="text-slate-400 type-level-2">Loading your pipeline…</p>
         </div>
       </PageShell>
     );
@@ -157,7 +156,9 @@ export default function PipelinePage() {
               Generating Your Video…
             </h1>
           )}
-          <p className="mt-2 text-slate-500 text-sm">Job ID: {job.job_id}</p>
+          <p className="mt-2 text-slate-500 type-level-2">
+            Job ID: {job.job_id}
+          </p>
         </div>
 
         {/* ── Failed state ── */}
@@ -173,26 +174,26 @@ export default function PipelinePage() {
         {job.voice_style && (
           <div className="rounded-2xl border border-violet-100 bg-violet-50 px-5 py-4 flex flex-wrap gap-5">
             <div className="flex flex-col gap-0.5">
-              <span className="text-xs font-medium text-violet-500 uppercase tracking-wide">
+              <span className="type-level-3 text-violet-500 uppercase tracking-wide">
                 Emotion
               </span>
-              <span className="text-sm font-semibold text-violet-800 capitalize">
+              <span className="type-level-2 text-violet-800 capitalize">
                 {job.voice_style.emotion}
               </span>
             </div>
             <div className="flex flex-col gap-0.5">
-              <span className="text-xs font-medium text-violet-500 uppercase tracking-wide">
+              <span className="type-level-3 text-violet-500 uppercase tracking-wide">
                 Speed
               </span>
-              <span className="text-sm font-semibold text-violet-800">
+              <span className="type-level-2 text-violet-800">
                 {job.voice_style.speed.toFixed(2)}×
               </span>
             </div>
             <div className="flex flex-col gap-0.5">
-              <span className="text-xs font-medium text-violet-500 uppercase tracking-wide">
+              <span className="type-level-3 text-violet-500 uppercase tracking-wide">
                 Volume
               </span>
-              <span className="text-sm font-semibold text-violet-800">
+              <span className="type-level-2 text-violet-800">
                 {job.voice_style.volume.toFixed(2)}×
               </span>
             </div>
@@ -231,7 +232,7 @@ export default function PipelinePage() {
                       {/* Label + message */}
                       <div className="flex-1 pt-1">
                         <p
-                          className={`text-sm font-semibold transition-colors duration-300 ${
+                          className={`type-level-2 transition-colors duration-300 ${
                             done
                               ? 'text-emerald-700'
                               : active
@@ -242,7 +243,7 @@ export default function PipelinePage() {
                           {stage.label}
                         </p>
                         {active && job.stage_message && (
-                          <p className="mt-0.5 text-xs italic text-slate-400">
+                          <p className="mt-0.5 type-level-3 italic text-slate-400">
                             {job.stage_message}
                           </p>
                         )}
@@ -250,7 +251,7 @@ export default function PipelinePage() {
 
                       {/* Done check */}
                       {done && (
-                        <span className="flex-shrink-0 mt-1 text-emerald-500 text-sm font-bold">
+                        <span className="flex-shrink-0 mt-1 text-emerald-500 type-level-2">
                           ✓
                         </span>
                       )}
@@ -262,7 +263,7 @@ export default function PipelinePage() {
 
             {/* Progress bar */}
             <div>
-              <div className="flex justify-between text-xs text-slate-400 mb-1.5">
+              <div className="flex justify-between type-level-3 text-slate-400 mb-1.5">
                 <span>Progress</span>
                 <span>{pct}%</span>
               </div>
@@ -286,7 +287,7 @@ export default function PipelinePage() {
             >
               <div className="flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4">
                 <span className="text-lg">🕐</span>
-                <p className="text-sm text-amber-800">
+                <p className="type-level-2 text-amber-800">
                   <strong>
                     Video generation usually takes 2–5 minutes on shared GPU.
                   </strong>{' '}
@@ -312,14 +313,14 @@ export default function PipelinePage() {
               <a
                 href={videoUrl}
                 download
-                className="flex items-center gap-2 rounded-xl bg-violet-600 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-violet-700 active:scale-[0.98]"
+                className="flex items-center gap-2 rounded-xl bg-violet-600 px-5 py-3 type-level-2 text-white shadow-sm transition hover:bg-violet-700 active:scale-[0.98]"
               >
                 <DownloadIcon />
                 Download Video
               </a>
               <button
                 onClick={() => router.push('/avatar/new')}
-                className="flex items-center gap-2 rounded-xl border-2 border-slate-200 bg-white px-5 py-3 text-sm font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-50 active:scale-[0.98]"
+                className="flex items-center gap-2 rounded-xl border-2 border-slate-200 bg-white px-5 py-3 type-level-2 text-slate-700 transition hover:border-slate-300 hover:bg-slate-50 active:scale-[0.98]"
               >
                 ＋ Create Another
               </button>
@@ -354,7 +355,7 @@ function PageShell({ children }: { children: React.ReactNode }) {
               <path d="M12 2a5 5 0 1 1 0 10A5 5 0 0 1 12 2zm0 12c5.33 0 8 2.67 8 4v2H4v-2c0-1.33 2.67-4 8-4z" />
             </svg>
           </div>
-          <span className="font-semibold text-slate-800 text-sm tracking-tight">
+          <span className="font-semibold text-slate-800 type-level-2 tracking-tight">
             AI Avatar
           </span>
         </div>
@@ -379,12 +380,12 @@ function ErrorCard({
         <div className="h-9 w-9 rounded-full bg-red-100 flex items-center justify-center text-red-600 font-bold text-base flex-shrink-0">
           ✕
         </div>
-        <h2 className="text-base font-semibold text-red-800">{title}</h2>
+        <h2 className="type-level-1 text-red-800">{title}</h2>
       </div>
-      <p className="text-sm text-red-700">{message}</p>
+      <p className="type-level-2 text-red-700">{message}</p>
       <button
         onClick={onRetry}
-        className="self-start rounded-xl bg-red-600 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-red-700 active:scale-[0.98]"
+        className="self-start rounded-xl bg-red-600 px-5 py-2.5 type-level-2 text-white transition hover:bg-red-700 active:scale-[0.98]"
       >
         Try Again
       </button>

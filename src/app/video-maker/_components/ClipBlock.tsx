@@ -1,5 +1,5 @@
 'use client';
-import { useRef, useState, useCallback, useLayoutEffect } from 'react';
+import React, { useRef, useState, useCallback, useLayoutEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { useEditor } from '../store';
 import { effectiveDuration, SPEED_OPTIONS } from '../types';
@@ -424,7 +424,7 @@ export default function ClipBlock({ clip, zoom }: Props) {
 
         {/* Label */}
         <div className="absolute inset-0 flex items-center px-2 pointer-events-none">
-          <span className="text-xs font-semibold text-white drop-shadow truncate">
+          <span className="type-level-3 text-white drop-shadow truncate">
             {media.name}
             {clip.speed !== 1 && (
               <span className="ml-1 opacity-80">{clip.speed}×</span>

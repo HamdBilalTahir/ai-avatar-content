@@ -355,12 +355,9 @@ export default function AvatarNewPage() {
   return (
     <div className="min-h-screen bg-[#F9FAFB] text-foreground flex flex-col">
       <TopHeader
-        title="Create Your Avatar"
-        description="Craft the perfect presenter for your video."
         breadcrumbs={[
-          { label: 'Project', href: '#' },
-          { label: 'Script', href: '/script' },
-          { label: 'Avatar' },
+          { label: 'Avatars', href: '/avatar' },
+          { label: 'New Avatar' },
         ]}
         actions={
           <Button
@@ -394,16 +391,16 @@ export default function AvatarNewPage() {
             {/* SECTION 1: DESCRIBE AVATAR */}
             <section className="flex flex-col gap-4">
               <div>
-                <h2 className="text-xl font-bold text-slate-800">
+                <h2 className="type-level-1 text-slate-800">
                   1. Describe Avatar
                 </h2>
-                <p className="text-sm text-slate-500 mt-1">
+                <p className="type-level-2 text-slate-500 mt-1">
                   What should your presenter look like?
                 </p>
               </div>
 
               <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5 shadow-sm">
-                <label className="block text-sm font-semibold text-slate-700 mb-2">
+                <label className="block type-level-2 text-slate-700 mb-2">
                   Avatar Prompt
                 </label>
                 <textarea
@@ -411,7 +408,7 @@ export default function AvatarNewPage() {
                   value={avatarPrompt}
                   onChange={(e) => setAvatarPrompt(e.target.value)}
                   placeholder="e.g. Professional woman in her 30s, confident expression, plain grey background"
-                  className="w-full resize-y rounded-xl border border-slate-200 bg-white px-4 py-3 text-slate-900 placeholder-slate-400 text-sm focus:border-violet-400 focus:outline-none focus:ring-2 focus:ring-violet-100 transition"
+                  className="w-full resize-y rounded-xl border border-slate-200 bg-white px-4 py-3 text-slate-900 placeholder-slate-400 type-level-2 focus:border-violet-400 focus:outline-none focus:ring-2 focus:ring-violet-100 transition"
                   disabled={isGeneratingAvatar}
                 />
 
@@ -421,7 +418,7 @@ export default function AvatarNewPage() {
                     <button
                       key={chip}
                       onClick={() => setAvatarPrompt(chip)}
-                      className="px-3 py-1.5 rounded-full bg-white border border-slate-200 text-xs text-slate-600 hover:border-violet-300 hover:text-violet-700 transition"
+                      className="px-3 py-1.5 rounded-full bg-white border border-slate-200 type-level-3 text-slate-600 hover:border-violet-300 hover:text-violet-700 transition"
                     >
                       {chip}
                     </button>
@@ -433,7 +430,7 @@ export default function AvatarNewPage() {
                   <button
                     type="button"
                     onClick={() => setShowNegativePrompt((v) => !v)}
-                    className="flex items-center gap-1.5 text-xs font-medium text-slate-500 hover:text-slate-700 transition"
+                    className="flex items-center gap-1.5 type-level-3 text-slate-500 hover:text-slate-700 transition"
                   >
                     <span
                       className="inline-block transition-transform duration-200"
@@ -460,7 +457,7 @@ export default function AvatarNewPage() {
                         value={negativePrompt}
                         onChange={(e) => setNegativePrompt(e.target.value)}
                         placeholder="e.g. glasses, beard, hat, blurry, cartoon"
-                        className="w-full resize-y rounded-xl border border-amber-200 bg-amber-50/50 px-4 py-3 text-slate-900 placeholder-slate-500 text-sm focus:border-amber-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-amber-100 transition"
+                        className="w-full resize-y rounded-xl border border-amber-200 bg-amber-50/50 px-4 py-3 text-slate-900 placeholder-slate-500 type-level-2 focus:border-amber-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-amber-100 transition"
                         disabled={isGeneratingAvatar}
                       />
                     </div>
@@ -471,10 +468,10 @@ export default function AvatarNewPage() {
                 <div className="mt-5 border-t border-slate-200/60 pt-4">
                   <div className="flex items-center justify-between mb-3">
                     <div>
-                      <span className="text-sm font-semibold text-slate-700">
+                      <span className="type-level-2 text-slate-700">
                         Reference images
                       </span>
-                      <span className="ml-1.5 text-xs text-slate-400">
+                      <span className="ml-1.5 type-level-3 text-slate-400">
                         (optional · up to 10)
                       </span>
                     </div>
@@ -486,7 +483,7 @@ export default function AvatarNewPage() {
                         <button
                           type="button"
                           disabled={isGeneratingAvatar}
-                          className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 transition hover:border-violet-300 hover:text-violet-700 disabled:opacity-50"
+                          className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 type-level-3 text-slate-600 transition hover:border-violet-300 hover:text-violet-700 disabled:opacity-50"
                         >
                           <UploadIcon />
                           Upload
@@ -503,7 +500,7 @@ export default function AvatarNewPage() {
                       <button
                         type="button"
                         disabled={isGeneratingAvatar}
-                        className="flex w-full items-center justify-center gap-2 rounded-xl border-2 border-dashed border-slate-200 bg-white py-6 text-sm text-slate-500 transition hover:border-violet-300 hover:text-violet-600 disabled:opacity-50"
+                        className="flex w-full items-center justify-center gap-2 rounded-xl border-2 border-dashed border-slate-200 bg-white py-6 type-level-2 text-slate-500 transition hover:border-violet-300 hover:text-violet-600 disabled:opacity-50"
                       >
                         <UploadIcon />
                         Upload reference photos to guide likeness
@@ -525,7 +522,7 @@ export default function AvatarNewPage() {
                           />
                           <button
                             onClick={() => handleRemoveReferenceImage(i)}
-                            className="absolute inset-0 flex items-center justify-center bg-black/50 opacity-0 group-hover:opacity-100 transition text-white text-xs font-bold"
+                            className="absolute inset-0 flex items-center justify-center bg-black/50 opacity-0 group-hover:opacity-100 transition text-white type-level-3"
                           >
                             ✕
                           </button>
@@ -555,7 +552,9 @@ export default function AvatarNewPage() {
                 {avatarError && (
                   <div className="mt-3 flex items-start gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3">
                     <span className="text-red-500">⚠</span>
-                    <p className="flex-1 text-sm text-red-700">{avatarError}</p>
+                    <p className="flex-1 type-level-2 text-red-700">
+                      {avatarError}
+                    </p>
                     <button
                       onClick={() => setAvatarError(null)}
                       className="text-red-400 hover:text-red-600"
@@ -570,17 +569,17 @@ export default function AvatarNewPage() {
             {/* SECTION 2: SCRIPT & VOICE */}
             <section className="flex flex-col gap-4">
               <div>
-                <h2 className="text-xl font-bold text-slate-800">
+                <h2 className="type-level-1 text-slate-800">
                   2. Script & Voice
                 </h2>
-                <p className="text-sm text-slate-500 mt-1">
+                <p className="type-level-2 text-slate-500 mt-1">
                   What should your avatar say?
                 </p>
               </div>
 
               {/* Topic */}
               <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5 shadow-sm">
-                <label className="block text-sm font-semibold text-slate-700 mb-1">
+                <label className="block type-level-2 text-slate-700 mb-1">
                   Video Topic
                 </label>
                 <textarea
@@ -588,14 +587,14 @@ export default function AvatarNewPage() {
                   value={topic}
                   onChange={(e) => setTopic(e.target.value)}
                   placeholder="e.g. 3 morning habits that will change your life"
-                  className="w-full resize-y rounded-xl border border-slate-200 bg-white px-4 py-3 text-slate-900 placeholder-slate-400 text-sm focus:border-violet-400 focus:outline-none transition"
+                  className="w-full resize-y rounded-xl border border-slate-200 bg-white px-4 py-3 text-slate-900 placeholder-slate-400 type-level-2 focus:border-violet-400 focus:outline-none transition"
                   disabled={isStartingPipeline}
                 />
 
                 {/* Script */}
                 <div className="mt-5">
                   <div className="flex items-center justify-between mb-3">
-                    <label className="block text-sm font-semibold text-slate-700">
+                    <label className="block type-level-2 text-slate-700">
                       Script
                     </label>
                     <div className="flex items-center gap-1 rounded-full border border-slate-200 bg-white p-0.5">
@@ -603,7 +602,7 @@ export default function AvatarNewPage() {
                         <button
                           key={mode}
                           onClick={() => setScriptMode(mode)}
-                          className={`rounded-full px-3 py-1 text-xs font-medium transition ${
+                          className={`rounded-full px-3 py-1 type-level-3 transition ${
                             scriptMode === mode
                               ? 'bg-slate-100 text-violet-700 shadow-sm border border-slate-200'
                               : 'text-slate-500 hover:text-slate-700'
@@ -624,13 +623,13 @@ export default function AvatarNewPage() {
                         value={aiTopic}
                         onChange={(e) => setAiTopic(e.target.value)}
                         placeholder="Topic for script..."
-                        className="flex-1 min-w-0 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:border-violet-400 focus:outline-none transition"
+                        className="flex-1 min-w-0 rounded-lg border border-slate-200 bg-white px-3 py-2 type-level-2 focus:border-violet-400 focus:outline-none transition"
                         disabled={isGeneratingScript}
                       />
                       <select
                         value={aiDuration}
                         onChange={(e) => setAiDuration(e.target.value as any)}
-                        className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-violet-400"
+                        className="rounded-lg border border-slate-200 bg-white px-3 py-2 type-level-2 outline-none focus:border-violet-400"
                         disabled={isGeneratingScript}
                       >
                         <option value="15s">15s</option>
@@ -649,12 +648,12 @@ export default function AvatarNewPage() {
                   )}
 
                   {scriptGenerateError && (
-                    <p className="mb-2 text-xs text-red-600">
+                    <p className="mb-2 type-level-3 text-red-600">
                       {scriptGenerateError}
                     </p>
                   )}
                   {scriptSuccessBanner && (
-                    <div className="mb-2 p-2 rounded-lg bg-emerald-50 text-emerald-700 text-xs">
+                    <div className="mb-2 p-2 rounded-lg bg-emerald-50 text-emerald-700 type-level-3">
                       ✓ Script generated — edit freely before continuing
                     </div>
                   )}
@@ -664,12 +663,12 @@ export default function AvatarNewPage() {
                     value={userScript}
                     onChange={(e) => setUserScript(e.target.value)}
                     placeholder="e.g. Did you know most people skip the one habit that changes everything?"
-                    className="w-full resize-y rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm focus:border-violet-400 focus:outline-none transition"
+                    className="w-full resize-y rounded-xl border border-slate-200 bg-white px-4 py-3 type-level-2 focus:border-violet-400 focus:outline-none transition"
                     disabled={isStartingPipeline}
                   />
 
                   {userScript.trim() && (
-                    <p className="mt-2 text-right text-xs text-slate-400">
+                    <p className="mt-2 text-right type-level-3 text-slate-400">
                       {userScript.trim().split(/\s+/).length} words · ~
                       {Math.round(
                         (userScript.trim().split(/\s+/).length / 140) * 60
@@ -681,7 +680,7 @@ export default function AvatarNewPage() {
 
                 {/* Voice */}
                 <div className="mt-5 border-t border-slate-200/60 pt-5">
-                  <label className="block text-sm font-semibold text-slate-700 mb-3">
+                  <label className="block type-level-2 text-slate-700 mb-3">
                     Voice
                   </label>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-2 mb-3">
@@ -703,7 +702,7 @@ export default function AvatarNewPage() {
                           }}
                           className="accent-violet-600 w-4 h-4"
                         />
-                        <span className="text-sm font-medium text-slate-700">
+                        <span className="type-level-2 text-slate-700">
                           {v.label}
                         </span>
                       </label>
@@ -714,7 +713,7 @@ export default function AvatarNewPage() {
                     value={customVoiceId}
                     onChange={(e) => setCustomVoiceId(e.target.value)}
                     placeholder="Or paste custom Cartesia voice ID..."
-                    className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 font-mono text-sm focus:border-violet-400 focus:outline-none transition"
+                    className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 font-mono type-level-2 focus:border-violet-400 focus:outline-none transition"
                   />
                 </div>
               </div>
@@ -725,7 +724,7 @@ export default function AvatarNewPage() {
         {/* RIGHT PANE (40%) - Preview & Action */}
         <div className="w-full lg:w-[40%] bg-[#F8FAFC] flex flex-col p-6 md:p-8">
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-xl font-bold text-slate-800">Preview</h2>
+            <h2 className="type-level-1 text-slate-800">Preview</h2>
 
             {/* Version Carousel Navigator */}
             {versions.length > 1 && (
@@ -751,7 +750,7 @@ export default function AvatarNewPage() {
                     />
                   </svg>
                 </button>
-                <span className="text-xs font-semibold text-slate-600">
+                <span className="type-level-3 text-slate-600">
                   v{currentVersionIndex + 1} of {versions.length}
                 </span>
                 <button
@@ -790,7 +789,7 @@ export default function AvatarNewPage() {
                   <div className="w-16 h-16 rounded-full bg-violet-100 flex items-center justify-center">
                     <Spinner className="w-8 h-8 text-violet-500" />
                   </div>
-                  <p className="text-sm font-medium text-violet-600">
+                  <p className="type-level-2 text-violet-600">
                     {cyclingMessage}
                   </p>
                 </div>
@@ -843,7 +842,7 @@ export default function AvatarNewPage() {
                   <h3 className="text-lg font-semibold text-slate-800">
                     No Avatar Yet
                   </h3>
-                  <p className="text-sm text-slate-500 mt-1 max-w-[250px] mx-auto">
+                  <p className="type-level-2 text-slate-500 mt-1 max-w-[250px] mx-auto">
                     Fill out the prompt on the left to generate your first
                     avatar.
                   </p>
@@ -870,7 +869,9 @@ export default function AvatarNewPage() {
               {pipelineError && (
                 <div className="flex items-start gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3">
                   <span className="text-red-500">⚠</span>
-                  <p className="flex-1 text-sm text-red-700">{pipelineError}</p>
+                  <p className="flex-1 type-level-2 text-red-700">
+                    {pipelineError}
+                  </p>
                 </div>
               )}
             </div>
@@ -887,7 +888,7 @@ export default function AvatarNewPage() {
                 <div className="animate-in fade-in slide-in-from-right-4 duration-300">
                   <div className="text-4xl mb-4">👋</div>
                   <h2 className="text-2xl font-bold text-slate-800 mb-2">
-                    Welcome to Kuai Labs
+                    Welcome to AI Native Videos
                   </h2>
                   <p className="text-slate-500">
                     Create AI avatars and script-driven video content in
@@ -932,7 +933,7 @@ export default function AvatarNewPage() {
               <div className="flex gap-2">
                 <button
                   onClick={completeOnboarding}
-                  className="px-4 py-2 text-slate-500 hover:text-slate-800 text-sm font-medium"
+                  className="px-4 py-2 text-slate-500 hover:text-slate-800 type-level-2"
                 >
                   Skip
                 </button>
@@ -942,7 +943,7 @@ export default function AvatarNewPage() {
                       ? setOnboardingSlide((s) => s + 1)
                       : completeOnboarding()
                   }
-                  className="px-6 py-2 bg-violet-600 hover:bg-violet-700 text-white text-sm font-medium rounded-lg transition-colors shadow-sm"
+                  className="px-6 py-2 bg-violet-600 hover:bg-violet-700 text-white type-level-2 rounded-lg transition-colors shadow-sm"
                 >
                   {onboardingSlide < 2 ? 'Next' : 'Get Started'}
                 </button>

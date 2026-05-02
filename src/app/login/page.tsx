@@ -64,20 +64,20 @@ export default function LoginPage() {
           <h1 className="text-2xl font-bold tracking-tight text-foreground">
             Welcome back
           </h1>
-          <p className="text-sm text-muted-foreground">
-            Log in to your Kuai Labs account
+          <p className="type-level-2 text-muted-foreground">
+            Log in to your AI Native Videos account
           </p>
         </div>
 
         <Card>
           <CardContent className="pt-6">
             {error && (
-              <div className="mb-4 rounded-md bg-destructive/15 p-3 text-sm text-destructive font-medium text-center">
+              <div className="mb-4 rounded-md bg-destructive/15 p-3 type-level-2 text-destructive font-medium text-center">
                 {error}
               </div>
             )}
             {message && (
-              <div className="mb-4 rounded-md bg-emerald-50 border border-emerald-200 p-3 text-sm text-emerald-700 font-medium text-center">
+              <div className="mb-4 rounded-md bg-emerald-50 border border-emerald-200 p-3 type-level-2 text-emerald-700 font-medium text-center">
                 {message}
               </div>
             )}
@@ -100,7 +100,7 @@ export default function LoginPage() {
                   <button
                     type="button"
                     onClick={handleForgotPassword}
-                    className="text-sm font-medium text-primary hover:underline bg-transparent border-none p-0 cursor-pointer"
+                    className="type-level-2 text-primary hover:underline bg-transparent border-none p-0 cursor-pointer"
                   >
                     Forgot your password?
                   </button>
@@ -120,7 +120,7 @@ export default function LoginPage() {
             </form>
           </CardContent>
           <CardFooter className="justify-center border-t border-border pt-6 pb-6">
-            <p className="text-sm text-muted-foreground">
+            <p className="type-level-2 text-muted-foreground">
               Don't have an account?{' '}
               <Link
                 href={`/signup${searchParams.toString() ? `?${searchParams.toString()}` : ''}`}

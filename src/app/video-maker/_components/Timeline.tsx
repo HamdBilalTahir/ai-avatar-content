@@ -1,5 +1,5 @@
 'use client';
-import { useRef, useEffect, useState } from 'react';
+import React, { useRef, useEffect } from 'react';
 import { useEditor, selectTotalDuration } from '../store';
 import {
   getHoverTrackId,
@@ -193,10 +193,7 @@ export default function Timeline() {
 
   function timeFromEvent(e: React.PointerEvent | React.MouseEvent) {
     const rect = e.currentTarget.getBoundingClientRect();
-    // Use scrollLeft to adjust the x coordinate if clicking within the scrollable area
-    const scrollLeft = scrollRef.current?.scrollLeft || 0;
     const clickX = e.clientX - rect.left - TRACK_HEADER_W;
-    const totalX = clickX + scrollLeft;
     return Math.max(0, clickX / zoom); // clickX is already relative to the ruler content which scrolled along, because event.currentTarget is the ruler which spans the full width
   }
 
@@ -277,7 +274,7 @@ export default function Timeline() {
 
   if (!activeProject) {
     return (
-      <div className="flex h-full items-center justify-center text-sm text-slate-400">
+      <div className="flex h-full items-center justify-center type-level-2 text-slate-400">
         Select or create a project to start editing.
       </div>
     );
@@ -287,25 +284,23 @@ export default function Timeline() {
     <div className="flex flex-col h-full bg-white border-t border-slate-200 select-none">
       {/* Toolbar */}
       <div className="flex items-center gap-2 border-b border-slate-200 px-3 py-1.5 flex-shrink-0">
-        <span className="text-sm font-semibold text-slate-500 mr-1">
-          Add track:
-        </span>
+        <span className="type-level-2 text-slate-500 mr-1">Add track:</span>
         <button
           onClick={() => addTrack('video')}
-          className="flex items-center gap-1 rounded-md border border-violet-200 bg-violet-50 px-3 py-1.5 text-sm font-medium text-violet-700 transition hover:bg-violet-100"
+          className="flex items-center gap-1 rounded-md border border-violet-200 bg-violet-50 px-3 py-1.5 type-level-2 text-violet-700 transition hover:bg-violet-100"
         >
           + Video
         </button>
         <button
           onClick={() => addTrack('audio')}
-          className="flex items-center gap-1 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-sm font-medium text-emerald-700 transition hover:bg-emerald-100"
+          className="flex items-center gap-1 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-1.5 type-level-2 text-emerald-700 transition hover:bg-emerald-100"
         >
           + Audio
         </button>
 
         {/* Zoom controls */}
         <div className="ml-auto flex items-center gap-1.5">
-          <span className="text-sm text-slate-400">Zoom</span>
+          <span className="type-level-2 text-slate-400">Zoom</span>
           <button
             onClick={() =>
               dispatch({ type: 'SET_ZOOM', zoom: Math.max(30, zoom / 2) })
@@ -314,7 +309,7 @@ export default function Timeline() {
           >
             −
           </button>
-          <span className="w-16 text-center text-sm font-mono text-slate-600">
+          <span className="w-16 text-center type-level-2 font-mono text-slate-600">
             {zoom}px/s
           </span>
           <button
@@ -354,7 +349,7 @@ export default function Timeline() {
                   className={`w-px bg-slate-300 ${major ? 'h-full' : 'h-3'}`}
                 />
                 {major && (
-                  <span className="absolute top-1 left-1 text-[11px] font-mono text-slate-500 whitespace-nowrap">
+                  <span className="absolute top-1 left-1 type-level-4 font-mono text-slate-500 whitespace-nowrap">
                     {formatRulerTime(time)}
                   </span>
                 )}
@@ -412,7 +407,7 @@ export default function Timeline() {
             ))}
 
             {activeProject.tracks.length === 0 && (
-              <div className="flex items-center justify-center py-12 text-xs text-slate-400">
+              <div className="flex items-center justify-center py-12 type-level-3 text-slate-400">
                 Add a track to start building your timeline.
               </div>
             )}

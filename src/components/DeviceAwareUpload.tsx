@@ -79,7 +79,7 @@ export default function DeviceAwareUpload({
         {hasLibraryImages && (
           <button
             onClick={handleLibrary}
-            className="w-full text-left px-4 h-[44px] hover:bg-gray-50 flex items-center gap-3 text-sm text-gray-700"
+            className="w-full text-left px-4 h-[44px] hover:bg-gray-50 flex items-center gap-3 type-level-2 text-gray-700"
           >
             <svg
               xmlns="http://www.w3.org/2000/svg"
@@ -102,7 +102,7 @@ export default function DeviceAwareUpload({
         )}
         <button
           onClick={handleUpload}
-          className="w-full text-left px-4 h-[44px] hover:bg-gray-50 flex items-center gap-3 text-sm text-gray-700"
+          className="w-full text-left px-4 h-[44px] hover:bg-gray-50 flex items-center gap-3 type-level-2 text-gray-700"
         >
           <svg
             xmlns="http://www.w3.org/2000/svg"
@@ -143,7 +143,7 @@ export default function DeviceAwareUpload({
 
       <div onClick={openMenu}>
         {children || (
-          <button className="flex items-center gap-2 px-4 py-2 bg-violet-600 text-white rounded-lg hover:bg-violet-700 text-sm font-medium">
+          <button className="flex items-center gap-2 px-4 py-2 bg-violet-600 text-white rounded-lg hover:bg-violet-700 type-level-2">
             Upload
           </button>
         )}

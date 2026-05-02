@@ -129,8 +129,14 @@ export async function POST(req: NextRequest) {
         break;
       }
       if (status === 'failed' || status === 'error') {
+        console.log(
+          `❌ Full failure response:`,
+          JSON.stringify(pollData, null, 2)
+        );
         const reason = pollData.error ?? pollData.message ?? 'unknown error';
-        throw new Error(`Evolink generation failed: ${reason}`);
+        throw new Error(
+          `Evolink generation failed: ${typeof reason === 'object' ? JSON.stringify(reason) : reason}`
+        );
       }
     }
 

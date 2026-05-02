@@ -1,3 +1,146 @@
+## 🗓️ **2026-05-02**
+
+---
+
+### 🐛 Fixes
+
+---
+
+> ### Fix React State Duplication Preventing Shots Display
+>
+> - **What changed:** Fixed a React component state synchronization issue where `expandedShotIndex` was duplicated in both `page.tsx` and `ScriptPanels.tsx`. Moved the state entirely to `page.tsx` and passed it as a prop so `ScriptPanels` accurately reflects the correct shot when changing threads or adding/removing shots. Removed unused state variables from `page.tsx`.
+> - **Why:** The duplicated state caused `ScriptPanels` to hold a stale active index after switching script threads or modifying shots, leading to the UI rendering empty or incorrect shots despite data existing in Firestore.
+> - **Files:**
+>   - `src/app/script/page.tsx`
+>   - `src/app/script/ScriptPanels.tsx`
+
+---
+
+> ### Expand Evolink Error Object in Generation Failure
+>
+> - **What changed:** Fixed the `[object Object]` error message surfaced when Evolink generation fails. The failure reason is now JSON-serialized when it's an object, and the full poll response is logged to the server console on failure.
+> - **Why:** The raw error object from Evolink's API was being coerced to a string via template literal, losing all detail. This makes failures diagnosable.
+> - **Files:**
+>   - `src/app/api/script/generate-video/evolink/route.ts`
+
+---
+
+## 🗓️ **2026-04-30**
+
+---
+
+### 🐛 Fixes
+
+---
+
+> ### Fix Generated Media Layout & Aspect Ratio Fallback for Legacy Videos
+>
+> - **What changed:** Fixed issue where legacy generated videos (e.g., Fight Scene) with missing `shotNumber` or `shotData` were not displaying properly. Added fallback to derive `shotNumber` from the loaded `shots` state map keyed by `shotId`. Fixed layout discrepancy where videos were all rendered at a fixed 120px width regardless of aspect ratio, causing landscape videos to appear significantly smaller (shorter) than portrait ones. Video thumbnail widths are now dynamically calculated based on their aspect ratio (140px for portrait, 200px for square, 280px for landscape). Added an aspect ratio fallback for videos without explicit `shotData` (like the first shot of some older records), inheriting the default aspect ratio from other shots in the same script.
+> - **Why:** Improves visual consistency across the Generated Video Library, correctly formatting videos from older Firestore records, preventing tiny/squished thumbnail previews.
+> - **Files:**
+>   - `src/app/results/page.tsx`
+
+---
+
+> ### Fix DropdownMenuLabel Outside Menu.Group Error
+>
+> - **What changed:** Wrapped `DropdownMenuLabel` in `DropdownMenuGroup` inside the `TopHeader` user dropdown, resolving a Base UI runtime error (`MenuGroupRootContext is missing`).
+> - **Why:** `DropdownMenuLabel` renders `MenuPrimitive.GroupLabel` which requires a `MenuPrimitive.Group` ancestor; the missing wrapper caused a crash on every page using `TopHeader`.
+> - **Files:**
+>   - `src/components/TopHeader.tsx`
+
+---
+
+### 💅 Styling and UI Improvements
+
+---
+
+> ### Rebrand to "AI Native Videos, Powered by Kuai Labs"
+>
+> - **What changed:** Replaced all standalone "Kuai Labs" references with "AI Native Videos" and added "Powered by Kuai Labs" as small trademark-style text in the sidebar and top header logo lockup.
+> - **Why:** Surfaces the product name prominently while retaining the Kuai Labs brand attribution.
+> - **Files:**
+>   - `src/components/TopHeader.tsx`
+>   - `src/components/AppSidebar.tsx`
+>   - `src/app/login/page.tsx`
+>   - `src/app/signup/page.tsx`
+>   - `src/app/avatar/new/page.tsx`
+
+---
+
+### 💅 Styling and UI Improvements
+
+---
+
+> ### Enforce 4-Level Typography System
+>
+> - **What changed:** Defined a strict 4-level typography system in `globals.css` (`type-level-1` through `type-level-4`) and audited the entire codebase to replace scattered ad-hoc tailwind classes (`text-sm`, `text-xs`, `text-[13px]`, `font-bold`, etc.). Level 1 (15px/500) applies to card titles and headings. Level 2 (13px/400) applies to body text and prompts. Level 3 (12px/400) covers metadata and secondary labels. Level 4 (11px/500/uppercase) styles section headers.
+> - **Why:** The app previously mixed font sizes and weights inconsistently. Applying a unified scale creates a much more polished, intentional, and cohesive interface without fundamentally changing any layouts.
+> - **Files:**
+>   - `src/app/globals.css`
+>   - _~18 component and page files across `src/`_
+
+---
+
+> ### Redesign Generated Media Panel
+>
+> - **What changed:** Redesigned the Generated Media panel into a structured media gallery grouping generated videos by their corresponding shot. Cards were transformed from dark rectangles into clean video tiles (respecting the shot's aspect ratio) featuring an explicit Play button. Added a dark overlay on hover to reveal Play, Download, and Delete actions. Beneath each thumbnail, the shot number and version are displayed cleanly with a muted generation timestamp. Also added a total count of videos next to the section header.
+> - **Why:** Makes the generated videos section easier to parse, interact with, and directly links specific video outputs visually with their parent shots.
+> - **Files:**
+>   - `src/app/script/page.tsx`
+
+---
+
+> ### Redesign Image Library Panel
+>
+> - **What changed:** Redesigned the Image Library panel as a proper media shelf with a 3-column square grid, hover overlay containing preview and delete actions, full-screen image preview, an improved empty state with a centered upload button, and subtle instructional text. Also fixed the upload button to skip the nested dropdown menu.
+> - **Why:** Replaces an outdated file-picker style with a modern, visual media shelf that provides better feedback and quicker actions (like previewing images).
+> - **Files:**
+>   - `src/app/script/page.tsx`
+
+---
+
+> ### Redesign Generation Settings Panel
+>
+> - **What changed:** Redesigned the Generation Settings right panel on the Script page. Removed the collapse toggle to keep settings permanently visible, removed the ProviderBadge from the main header and integrated its function (Change provider) directly into the panel's Top section, and updated the Generate button to feature provider-aware colors (Vertex AI is green, Gemini is blue) along with improved disabled state labels. The settings sections are now cleanly separated by dividers rather than colored banners.
+> - **Why:** Improves usability by keeping core generation settings and provider configurations permanently accessible in a unified, cleanly separated panel without cluttering the global app header.
+> - **Files:**
+>   - `src/app/script/page.tsx`
+>   - `src/components/ProviderBadge.tsx`
+
+---
+
+> ### Main Content Area Padding & Layout Fix
+>
+> - **What changed:** Updated the Script Editor's main content column layout to feature a consistent 24px internal padding (`p-6`). The center column content is now wrapped in a max-width container capped at 800px and centered (`max-w-[800px] flex justify-center`), preventing awkward stretching on wide monitors. Adjusted the vertical margin below the Globals card to precisely 20px (`mb-5`), ensuring visual balance. Adjusted shot cards to feature a uniform 16px internal padding (`p-4`), removing the cramped vertical padding in the headers.
+> - **Why:** The previous full-width layout with tight and inconsistent padding made the editor feel unfinished and cramped on standard screens, and uncomfortably stretched on large monitors.
+> - **Files:**
+>   - `src/app/script/page.tsx`
+
+---
+
+> ### Redesign App Sidebar
+>
+> - **What changed:** Redesigned `AppSidebar` to a 220px expanded width (48px collapsed). Nav items now have 16px icons with consistent stroke weight, and hover states with a background-secondary fill and `border-radius: 6px` applied exclusively to the item row. Active items feature a stronger background and medium font-weight labels. Group labels received distinct 10px uppercase, letter-spaced styling with a 20px top margin. The user profile row was updated with a full-width 0.5px top border, displaying the user's name and plan badge alongside a sign-out icon.
+> - **Why:** Makes the sidebar visually distinct and aligns its weight, highlights, and structure with modern commercial product dashboards (like Linear or Vercel).
+> - **Files:**
+>   - `src/components/AppSidebar.tsx`
+>   - `src/app/globals.css`
+
+---
+
+> ### Redesign App Header & Navigation
+>
+> - **What changed:** Redesigned the `TopHeader` component into three distinct zones: a left zone with a Kuai Labs logomark and wordmark, a center zone featuring clickable breadcrumb navigation, and a right zone containing the provider badge, notification bell, and a user avatar dropdown menu (for settings and logout). Removed the old H1 page titles and refactored the layout on the Script page to ensure the header spans the full viewport width.
+> - **Why:** Replaces the generic scaffold header with a commercial-grade, brand-aligned top navigation that provides clear context via breadcrumbs and easy access to account settings, while recovering vertical space by removing redundant page titles.
+> - **Files:**
+>   - `src/components/TopHeader.tsx`
+>   - `src/app/script/page.tsx`
+>   - `src/app/avatar/new/page.tsx`
+>   - `src/app/settings/page.tsx`
+
+---
+
 ## 🗓️ **2026-04-29**
 
 ---

@@ -176,11 +176,11 @@ export default function PromptEditor({
   };
 
   return (
-    <div className="relative w-full h-80">
+    <div className="relative w-full h-40">
       {/* Background Div for Highlighting */}
       <div
         ref={highlightRef}
-        className={`absolute inset-0 w-full h-full bg-white border rounded-lg p-3 text-sm text-slate-700 font-sans whitespace-pre-wrap break-words overflow-hidden transition-colors
+        className={`absolute inset-0 w-full h-full bg-white border rounded-lg p-3 type-level-2 text-slate-700 font-sans whitespace-pre-wrap break-words overflow-hidden transition-colors
           ${isFocused ? 'border-violet-500 ring-1 ring-violet-500 shadow-sm' : 'border-slate-200 shadow-sm'}`}
         aria-hidden="true"
       >
@@ -209,7 +209,7 @@ export default function PromptEditor({
         onKeyDown={handleKeyDown}
         placeholder={placeholder}
         spellCheck={false}
-        className="absolute inset-0 w-full h-full p-3 text-sm font-sans whitespace-pre-wrap break-words bg-transparent text-transparent placeholder:text-slate-400 caret-slate-900 border border-transparent rounded-lg resize-none focus:outline-none focus:ring-0 z-10 m-0 overflow-y-auto"
+        className="absolute inset-0 w-full h-full p-3 type-level-2 font-sans whitespace-pre-wrap break-words bg-transparent text-transparent placeholder:text-slate-400 caret-slate-900 border border-transparent rounded-lg resize-none focus:outline-none focus:ring-0 z-10 m-0 overflow-y-auto"
         style={{
           color: 'transparent',
         }}
@@ -223,7 +223,7 @@ export default function PromptEditor({
             className="absolute z-50 w-64 bg-white border border-slate-200 rounded-lg shadow-xl overflow-hidden pointer-events-auto"
             style={{ top: dropdownPos.top, left: dropdownPos.left }}
           >
-            <div className="px-3 py-2 bg-slate-50 border-b border-slate-100 text-xs font-semibold text-slate-500 uppercase tracking-wider">
+            <div className="px-3 py-2 bg-slate-50 border-b border-slate-100 type-level-4 text-slate-500">
               Variables
             </div>
             <div className="max-h-48 overflow-y-auto py-1">
@@ -235,11 +235,11 @@ export default function PromptEditor({
                     handleSelectAutocomplete(g.name);
                   }}
                   onMouseEnter={() => setSelectedIndex(i)}
-                  className={`px-3 py-2 text-sm cursor-pointer transition-colors flex flex-col gap-0.5
+                  className={`px-3 py-2 type-level-2 cursor-pointer transition-colors flex flex-col gap-0.5
                   ${i === selectedIndex ? 'bg-violet-50 text-violet-900' : 'text-slate-700 hover:bg-slate-50'}`}
                 >
                   <div className="font-mono font-semibold">{g.name}</div>
-                  <div className="text-xs text-slate-500 truncate">
+                  <div className="type-level-3 text-slate-500 truncate">
                     {g.value}
                   </div>
                 </div>

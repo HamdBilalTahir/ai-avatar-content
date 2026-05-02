@@ -43,15 +43,15 @@ export default function SignupPage() {
           <h1 className="text-2xl font-bold tracking-tight text-foreground">
             Create an account
           </h1>
-          <p className="text-sm text-muted-foreground">
-            Sign up to get started with Kuai Labs
+          <p className="type-level-2 text-muted-foreground">
+            Sign up to get started with AI Native Videos
           </p>
         </div>
 
         <Card>
           <CardContent className="pt-6">
             {error && (
-              <div className="mb-4 rounded-md bg-destructive/15 p-3 text-sm text-destructive font-medium text-center">
+              <div className="mb-4 rounded-md bg-destructive/15 p-3 type-level-2 text-destructive font-medium text-center">
                 {error}
               </div>
             )}
@@ -85,7 +85,7 @@ export default function SignupPage() {
             </form>
           </CardContent>
           <CardFooter className="justify-center border-t border-border pt-6 pb-6">
-            <p className="text-sm text-muted-foreground">
+            <p className="type-level-2 text-muted-foreground">
               Already have an account?{' '}
               <Link
                 href={`/login${searchParams.toString() ? `?${searchParams.toString()}` : ''}`}

@@ -1,5 +1,5 @@
 'use client';
-import { useRef, useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { useEditor } from '../store';
 import {
   getDraggingMedia,
@@ -108,7 +108,7 @@ export default function TrackRow({
               <path d="M9 18V6l12-2v12M9 18a3 3 0 1 1-6 0 3 3 0 0 1 6 0zM21 16a3 3 0 1 1-6 0 3 3 0 0 1 6 0z" />
             </svg>
           )}
-          <span className="truncate text-xs font-semibold text-slate-700">
+          <span className="truncate type-level-3 text-slate-700">
             {track.name}
           </span>
         </div>
