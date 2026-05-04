@@ -29,13 +29,19 @@ async function saveVideo(
   ai: GoogleGenAI,
   operation: any,
   outputName: string
-): Promise<string> {
+): Promise<{ outputName: string; videoReference?: any }> {
   // Poll for completion
+  let elapsed = 0;
   while (!operation.done) {
-    console.log('Waiting for video generation to complete...');
+    console.log(
+      `Waiting for video generation to complete... ${elapsed}s elapsed`
+    );
     await new Promise((resolve) => setTimeout(resolve, 10000));
+    elapsed += 10;
     operation = await ai.operations.getVideosOperation({ operation });
   }
+
+  console.log(`Operation finished after ${elapsed}s, processing response...`);
 
   // Check for RAI filtering
   const response = operation.response;
@@ -63,7 +69,7 @@ async function saveVideo(
       downloadPath: outputName,
     });
     console.log(`✅ SUCCESS — saved to ${outputName}`);
-    return outputName;
+    return { outputName, videoReference: response.generatedVideos[0].video };
   } else {
     throw new Error(
       'No video was returned — the generation may have been filtered or failed silently.'
@@ -97,6 +103,54 @@ function wrapError(error: any): never {
   throw out;
 }
 
+// ─── Extend Video ─────────────────────────────────────────────────────────────
+
+export async function extendReelVideo({
+  prompt,
+  outputName,
+  videoReference,
+  modelName = 'veo-3.1-fast-generate-001',
+  duration = 8,
+  resolution = '720p',
+  aspectRatio = '16:9',
+  apiKey,
+  negativePrompt,
+}: {
+  prompt: string;
+  outputName: string;
+  videoReference: any;
+  modelName?: string;
+  duration?: number;
+  resolution?: string;
+  aspectRatio?: string;
+  apiKey?: string;
+  negativePrompt?: string;
+}) {
+  if (!apiKey) {
+    throw new Error('Missing VEO API KEY. Please provide it in the UI.');
+  }
+  const ai = new GoogleGenAI({ apiKey });
+  logConfig(outputName, modelName, duration, resolution, 'Extend Video');
+  console.log(`  - Prompt: ${prompt.substring(0, 50)}...`);
+
+  try {
+    const operation = await (ai.models.generateVideos as any)({
+      model: modelName,
+      prompt,
+      video: videoReference,
+      config: {
+        aspectRatio: aspectRatio as any,
+        durationSeconds: duration,
+        resolution: resolution as any,
+        ...(negativePrompt ? { negativePrompt } : {}),
+      },
+    });
+    return await saveVideo(ai, operation, outputName);
+  } catch (error: any) {
+    wrapError(error);
+  }
+}
+
 // ─── Text to Video ────────────────────────────────────────────────────────────
 
 export async function generateReelText({
@@ -106,6 +160,7 @@ export async function generateReelText({
   duration = 8,
   resolution = '720p',
   apiKey,
+  negativePrompt,
 }: {
   prompt: string;
   outputName: string;
@@ -113,6 +168,7 @@ export async function generateReelText({
   duration?: number;
   resolution?: string;
   apiKey?: string;
+  negativePrompt?: string;
 }) {
   if (!apiKey) {
     throw new Error('Missing VEO API KEY. Please provide it in the UI.');
@@ -129,6 +185,7 @@ export async function generateReelText({
         aspectRatio: '9:16',
         durationSeconds: duration,
         resolution: resolution as any,
+        ...(negativePrompt ? { negativePrompt } : {}),
       },
     });
     return await saveVideo(ai, operation, outputName);
@@ -147,6 +204,7 @@ export async function generateReelImageDirect({
   duration = 8,
   resolution = '720p',
   apiKey,
+  negativePrompt,
 }: {
   prompt: string;
   outputName: string;
@@ -155,6 +213,7 @@ export async function generateReelImageDirect({
   duration?: number;
   resolution?: string;
   apiKey?: string;
+  negativePrompt?: string;
 }) {
   if (!apiKey) {
     throw new Error('Missing VEO API KEY. Please provide it in the UI.');
@@ -182,6 +241,7 @@ export async function generateReelImageDirect({
         aspectRatio: '9:16',
         durationSeconds: duration,
         resolution: resolution as any,
+        ...(negativePrompt ? { negativePrompt } : {}),
       },
     } as any);
     return await saveVideo(ai, operation, outputName);
@@ -189,6 +249,10 @@ export async function generateReelImageDirect({
     wrapError(error);
   }
 }
+
+// ─── Reference Images → Video ─────────────────────────────────────────────────
+
+// ─── First & Last Frame → Video ───────────────────────────────────────────────
 
 // ─── Reference Images → Video ─────────────────────────────────────────────────
 
@@ -200,6 +264,7 @@ export async function generateReelImageRefs({
   duration = 8,
   resolution = '720p',
   apiKey,
+  negativePrompt,
 }: {
   prompt: string;
   outputName: string;
@@ -208,6 +273,7 @@ export async function generateReelImageRefs({
   duration?: number;
   resolution?: string;
   apiKey?: string;
+  negativePrompt?: string;
 }) {
   if (!apiKey) {
     throw new Error('Missing VEO API KEY. Please provide it in the UI.');
@@ -237,6 +303,7 @@ export async function generateReelImageRefs({
         durationSeconds: duration,
         resolution: resolution as any,
         referenceImages: refImages,
+        ...(negativePrompt ? { negativePrompt } : {}),
       },
     });
     return await saveVideo(ai, operation, outputName);

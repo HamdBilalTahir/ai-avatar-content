@@ -32,18 +32,31 @@ export async function POST(req: NextRequest) {
       existingCount ?? 0
     );
 
-    const generatedPath = await generateReelImageDirect({
-      prompt,
+    const PACING_INSTRUCTION =
+      'Speak at a natural conversational pace of approximately 2.5 to 3 words per second. No pauses between words.';
+    const HARD_STOP_INSTRUCTION =
+      'Stop all dialogue, mouth movement, and speech immediately when the scripted lines are finished. Hold a neutral expression after speaking.';
+    const NEGATIVE_PROMPT =
+      'slow speech, long pauses, continued talking after dialogue ends, extra lip movement, mumbling';
+
+    const enhancedPrompt = `${prompt}\n\nInstructions:\n- ${PACING_INSTRUCTION}\n- ${HARD_STOP_INSTRUCTION}`;
+
+    const res = await generateReelImageDirect({
+      prompt: enhancedPrompt,
       outputName: outputPath,
-      image,
+      image: {
+        base64: image.base64 || image.data,
+        mimeType: image.mimeType || image.mime_type || 'image/jpeg',
+      },
       modelName,
       duration,
       resolution,
       apiKey,
+      negativePrompt: NEGATIVE_PROMPT,
     });
 
-    if (generatedPath) {
-      const buffer = await fs.readFile(outputPath);
+    if (res?.outputName) {
+      const buffer = await fs.readFile(res.outputName);
       return new NextResponse(buffer, {
         status: 200,
         headers: {

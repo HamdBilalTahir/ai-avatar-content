@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useMemo, memo } from 'react';
 import Image from 'next/image';
 import { Trash2, Film, Eye, UploadCloud } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -71,7 +71,7 @@ type Props = {
   setIsDeletingAllVars: (val: boolean) => void;
 };
 
-export default function ScriptPanels(props: Props) {
+function ScriptPanels(props: Props) {
   const {
     shots,
     setShots,
@@ -118,6 +118,42 @@ export default function ScriptPanels(props: Props) {
   const [abortController, setAbortController] =
     useState<AbortController | null>(null);
   const [isLibraryExpanded, setIsLibraryExpanded] = useState(true);
+
+  // O(n) build once per generatedVideos change → O(1) lookup per shot in the list
+  const videosByShotId = useMemo(() => {
+    const map = new Map<string, GeneratedVideo[]>();
+    for (const v of generatedVideos) {
+      if (!map.has(v.shotId)) map.set(v.shotId, []);
+      map.get(v.shotId)!.push(v);
+    }
+    return map;
+  }, [generatedVideos]);
+
+  const expandedShot =
+    expandedShotIndex !== null ? shots[expandedShotIndex] : null;
+
+  // Videos for the currently expanded shot (includes legacy shotNumber fallback)
+  const expandedShotVideos = useMemo(() => {
+    if (!expandedShot) return [];
+    return generatedVideos.filter(
+      (v) =>
+        v.shotId === expandedShot.id ||
+        (v.shotNumber && v.shotNumber === expandedShot.shot_number)
+    );
+  }, [expandedShot, generatedVideos]);
+
+  // Variable tokens in the expanded shot's prompt
+  const expandedShotVars = useMemo(() => {
+    if (!expandedShot) return null;
+    const matches = expandedShot.prompt.match(/\{([^}]+)\}/g);
+    if (!matches) return null;
+    const uniqueVars = Array.from(new Set(matches.map((m) => m.slice(1, -1))));
+    if (uniqueVars.length === 0) return null;
+    return uniqueVars.map((varName) => ({
+      varName,
+      isResolved: globals.some((g) => g.name === varName),
+    }));
+  }, [expandedShot, globals]);
 
   return (
     <>
@@ -317,14 +353,12 @@ export default function ScriptPanels(props: Props) {
               ) : (
                 shots.map((shot, index) => {
                   const isExpanded = expandedShotIndex === index;
-                  const shotVideos = generatedVideos.filter(
-                    (v) => v.shotId === shot.id
-                  );
+                  const shotVideos = videosByShotId.get(shot.id ?? '') ?? [];
 
                   return (
                     <div
-                      key={index}
-                      className={`bg-white rounded-xl transition-all relative overflow-hidden group ${
+                      key={shot.id}
+                      className={`bg-white rounded-xl relative overflow-hidden group ${
                         isExpanded
                           ? 'shadow-[0_2px_10px_rgba(0,0,0,0.06)] border-[1.5px] border-violet-500'
                           : shot.selected
@@ -426,7 +460,7 @@ export default function ScriptPanels(props: Props) {
               <div className="absolute bottom-4 left-4 right-4 z-20">
                 <button
                   onClick={addShot}
-                  className="w-full py-2.5 border border-dashed border-slate-300 rounded-lg bg-white/95 backdrop-blur-md text-slate-600 hover:text-violet-700 hover:border-violet-300 hover:bg-violet-50 transition-all flex items-center justify-center gap-2 font-medium shadow-sm type-level-2"
+                  className="w-full py-2.5 border border-dashed border-slate-300 rounded-lg bg-white text-slate-600 hover:text-violet-700 hover:border-violet-300 hover:bg-violet-50 transition-colors flex items-center justify-center gap-2 font-medium shadow-sm type-level-2"
                 >
                   <span>+</span> Add Shot
                 </button>
@@ -448,12 +482,8 @@ export default function ScriptPanels(props: Props) {
         ) : (
           <div className="flex-1 flex flex-col w-full max-w-5xl mx-auto">
             {(() => {
-              const shot = shots[expandedShotIndex];
-              const shotVideos = generatedVideos.filter(
-                (v) =>
-                  v.shotId === shot.id ||
-                  (v.shotNumber && v.shotNumber === shot.shot_number)
-              );
+              const shot = expandedShot!;
+              const shotVideos = expandedShotVideos;
               const hasVideo = shotVideos.length > 0;
               const isPortrait = shot.aspectRatio === '9:16';
               const isSquare = shot.aspectRatio === '1:1';
@@ -527,7 +557,11 @@ export default function ScriptPanels(props: Props) {
                           Prompt
                         </label>
                         <div className="flex items-center gap-3 type-level-3 text-slate-400">
-                          <button className="hover:text-violet-600 transition-colors font-medium">
+                          <button
+                            disabled
+                            className="opacity-40 cursor-not-allowed font-medium"
+                            title="Coming soon"
+                          >
                             Enhance
                           </button>
                           <button
@@ -567,33 +601,18 @@ export default function ScriptPanels(props: Props) {
                         placeholder="Describe your shot here..."
                       />
 
-                      {(() => {
-                        const matches = shot.prompt.match(/\{([^}]+)\}/g);
-                        if (!matches) return null;
-                        const uniqueVars = Array.from(
-                          new Set(matches.map((m) => m.slice(1, -1)))
-                        );
-                        if (uniqueVars.length === 0) return null;
-
-                        return (
-                          <div className="mt-1 flex flex-wrap gap-2">
-                            {uniqueVars.map((varName, i) => {
-                              const globalVar = globals.find(
-                                (g) => g.name === varName
-                              );
-                              const isResolved = !!globalVar;
-                              return (
-                                <div
-                                  key={i}
-                                  className={`px-2 py-1 type-level-4 font-mono rounded border ${isResolved ? 'bg-violet-50 text-violet-700 border-violet-200' : 'bg-red-50 text-red-600 border-red-200'}`}
-                                >
-                                  {`{${varName}}`}
-                                </div>
-                              );
-                            })}
-                          </div>
-                        );
-                      })()}
+                      {expandedShotVars && (
+                        <div className="mt-1 flex flex-wrap gap-2">
+                          {expandedShotVars.map(({ varName, isResolved }) => (
+                            <div
+                              key={varName}
+                              className={`px-2 py-1 type-level-4 font-mono rounded border ${isResolved ? 'bg-violet-50 text-violet-700 border-violet-200' : 'bg-red-50 text-red-600 border-red-200'}`}
+                            >
+                              {`{${varName}}`}
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
 
                     {/* Right: Shot Settings */}
@@ -678,13 +697,13 @@ export default function ScriptPanels(props: Props) {
                         </label>
                         {shot.imageRefs.length > 0 && (
                           <div className="flex gap-2 overflow-x-auto pb-2 mb-2">
-                            {shot.imageRefs.map((refId, i) => {
+                            {shot.imageRefs.map((refId) => {
                               const img = images.find(
                                 (img) => img.id === refId
                               );
                               return (
                                 <div
-                                  key={i}
+                                  key={refId}
                                   className="relative group w-12 h-12 shrink-0 rounded-md border border-slate-200 overflow-hidden bg-white shadow-sm"
                                 >
                                   {img ? (
@@ -693,6 +712,7 @@ export default function ScriptPanels(props: Props) {
                                       alt="ref"
                                       fill
                                       unoptimized
+                                      loading="lazy"
                                       className="object-cover"
                                     />
                                   ) : (
@@ -703,13 +723,13 @@ export default function ScriptPanels(props: Props) {
                                   <button
                                     onClick={(e) => {
                                       e.stopPropagation();
-                                      const newRefs = [...shot.imageRefs];
-                                      newRefs.splice(i, 1);
                                       updateShot(expandedShotIndex, {
-                                        imageRefs: newRefs,
+                                        imageRefs: shot.imageRefs.filter(
+                                          (id) => id !== refId
+                                        ),
                                       });
                                     }}
-                                    className="absolute -top-1 -right-1 bg-white hover:bg-red-50 text-slate-400 hover:text-red-500 rounded-full w-5 h-5 flex items-center justify-center type-level-4 shadow-sm border border-slate-200 opacity-0 group-hover:opacity-100 transition-all z-10"
+                                    className="absolute -top-1 -right-1 bg-white hover:bg-red-50 text-slate-400 hover:text-red-500 rounded-full w-5 h-5 flex items-center justify-center type-level-4 shadow-sm border border-slate-200 opacity-0 group-hover:opacity-100 transition-opacity z-10"
                                     title="Remove image"
                                   >
                                     ×
@@ -722,6 +742,7 @@ export default function ScriptPanels(props: Props) {
 
                         {shot.imageRefs.length < 3 && (
                           <DeviceAwareUpload
+                            className="w-full"
                             onUpload={(files) => {
                               const newImages = addImagesToLibrary(files);
                               const availableSlots = 3 - shot.imageRefs.length;
@@ -738,7 +759,10 @@ export default function ScriptPanels(props: Props) {
                             }}
                             hasLibraryImages={images.length > 0}
                           >
-                            <button className="w-full py-2 type-level-3 border border-dashed border-slate-300 rounded-md text-slate-500 hover:text-violet-700 hover:border-violet-300 hover:bg-violet-50 transition-colors flex items-center justify-center gap-1.5 font-medium">
+                            <button
+                              type="button"
+                              className="w-full py-2 type-level-3 border border-dashed border-slate-300 rounded-md text-slate-500 hover:text-violet-700 hover:border-violet-300 hover:bg-violet-50 transition-colors flex items-center justify-center gap-1.5 font-medium"
+                            >
                               + Add Image
                             </button>
                           </DeviceAwareUpload>
@@ -756,7 +780,7 @@ export default function ScriptPanels(props: Props) {
       {/* Right Pane: Globals, Settings & Library */}
       <div className="w-[300px] shrink-0 h-auto lg:h-full overflow-y-auto bg-white border-l border-slate-200 flex flex-col shadow-sm box-border relative">
         {/* Globals Section */}
-        <div className="p-5 border-b border-slate-100 bg-white flex-shrink-0 transition-all">
+        <div className="p-5 border-b border-slate-100 bg-white flex-shrink-0">
           <div className="shrink-0 bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
             <div
               className={`flex items-center justify-between p-4 cursor-pointer hover:bg-slate-50 transition-colors ${isGlobalsExpanded ? 'border-b border-slate-100' : ''}`}
@@ -844,7 +868,7 @@ export default function ScriptPanels(props: Props) {
                               );
                             }
                           }}
-                          className="type-level-3 text-slate-500 hover:text-violet-600 bg-white border border-slate-200 hover:border-violet-300 hover:bg-violet-50 active:bg-violet-100 active:scale-95 px-2 py-1 rounded transition-all flex items-center gap-1.5 shadow-sm"
+                          className="type-level-3 text-slate-500 hover:text-violet-600 bg-white border border-slate-200 hover:border-violet-300 hover:bg-violet-50 active:bg-violet-100 active:scale-95 px-2 py-1 rounded transition-colors flex items-center gap-1.5 shadow-sm"
                           title="Copy variables"
                         >
                           {isGlobalsBulkCopied ? 'Copied' : 'Copy'}
@@ -854,7 +878,7 @@ export default function ScriptPanels(props: Props) {
                             e.stopPropagation();
                             setBulkText('');
                           }}
-                          className="type-level-3 text-slate-500 hover:text-slate-700 bg-white border border-slate-200 hover:bg-slate-100 active:bg-slate-200 active:scale-95 px-2 py-1 rounded transition-all shadow-sm"
+                          className="type-level-3 text-slate-500 hover:text-slate-700 bg-white border border-slate-200 hover:bg-slate-100 active:bg-slate-200 active:scale-95 px-2 py-1 rounded transition-colors shadow-sm"
                           title="Clear variables"
                         >
                           Clear
@@ -1003,7 +1027,7 @@ export default function ScriptPanels(props: Props) {
         </div>
 
         {/* Generation Settings */}
-        <div className="p-6 border-b border-slate-100 bg-slate-50/50 flex-shrink-0 transition-all">
+        <div className="p-6 border-b border-slate-100 bg-slate-50/50 flex-shrink-0">
           <div className="flex items-center justify-between mb-4">
             <h2 className="type-level-4 text-slate-500">Generation Settings</h2>
           </div>
@@ -1161,11 +1185,13 @@ export default function ScriptPanels(props: Props) {
                   const controller = new AbortController();
                   setAbortController(controller);
 
-                  const newShots = [...shots];
-                  selectedIndices.forEach((i) => {
-                    newShots[i].status = 'generating';
-                  });
-                  setShots(newShots);
+                  setShots((prev) =>
+                    prev.map((s, i) =>
+                      selectedIndices.includes(i)
+                        ? { ...s, status: 'generating' }
+                        : s
+                    )
+                  );
 
                   // Call actual API
                   Promise.all(
@@ -1494,7 +1520,7 @@ export default function ScriptPanels(props: Props) {
         </div>
 
         {/* Image Library */}
-        <div className="p-6 flex-1 min-h-0 flex flex-col transition-all">
+        <div className="p-6 flex-1 min-h-0 flex flex-col">
           <div
             className="flex items-center justify-between mb-4 cursor-pointer"
             onClick={() => setIsLibraryExpanded(!isLibraryExpanded)}
@@ -1569,6 +1595,7 @@ export default function ScriptPanels(props: Props) {
                         alt="Library Item"
                         fill
                         unoptimized
+                        loading="lazy"
                         className="object-cover"
                       />
                       <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
@@ -1606,3 +1633,5 @@ export default function ScriptPanels(props: Props) {
     </>
   );
 }
+
+export default memo(ScriptPanels);

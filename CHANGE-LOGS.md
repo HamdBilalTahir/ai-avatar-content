@@ -1,3 +1,305 @@
+## 🗓️ **2026-05-04**
+
+---
+
+### 📚 Docs
+
+---
+
+> ### Document Sandbox, New DB Flows & APIs
+>
+> - **What changed:** Updated Architecture.md and README.md to reflect the newly introduced `/sandbox` testing environment, migration to Firebase Firestore and Vercel Blob, and the new backend APIs handling these operations.
+> - **Why:** Keeps system architecture diagrams and project structure documentation aligned with current realities.
+> - **Files:**
+>   - `Architecture.md`
+>   - `README.md`
+
+---
+
+### 🐛 Fixes
+
+---
+
+> ### Prevent Sandbox Firestore Crash on Large videoReference
+>
+> - **What changed:** Refactored the video generation pipeline to stop storing the massive `videoReference` object inside Firestore documents. Instead, the backend serializes `videoReference` to a JSON file, uploads it to Vercel Blob, and returns a lightweight `videoReferenceUrl`. The Extend APIs (Gemini and Vertex) were updated to accept this URL, fetch the JSON on-demand, and pass the reconstructed object to the Veo model. Also fixed the Google GenAI config parameter structure for extending videos to match the official spec (`video: videoReference` instead of `config.sourceVideo`).
+> - **Why:** The raw `videoReference` object returned by Veo 3.1 is extremely large (often base64 strings). Attempting to save it to Firestore caused the 1 MB document size limit to be exceeded, which broke the sandbox step synchronization and made subsequent Extend calls fail with a "Missing previous step video reference" error. Additionally, fixing the SDK parameters ensures extensions actually work properly.
+> - **Files:**
+>   - `src/lib/sandbox-updater.ts`
+>   - `src/app/sandbox/page.tsx`
+>   - `src/app/api/script/extend-video/gemini/route.ts`
+>   - `src/app/api/script/extend-video/vertex/route.ts`
+>   - `src/app/api/script/generate-video/image-refs/route.ts`
+>   - `src/app/api/script/generate-video/vertex/image-refs/route.ts`
+>   - `src/services/gemini-video.ts`
+>   - `src/services/vertex-video.ts`
+
+---
+
+> ### Fix Firebase Admin Initialization Crash in Sandbox Updater
+>
+> - **What changed:** Added a safety check (`typeof db.collection !== 'function'`) to gracefully handle Firebase Admin not being fully initialized when updating Sandbox runs instead of throwing `TypeError: db.collection is not a function`.
+> - **Why:** Prevents the video generation completion handler from crashing entirely when environment variables for Firebase Admin are missing (like when running locally without the service account).
+> - **Files:**
+>   - `src/lib/sandbox-updater.ts`
+
+---
+
+> ### Improve Sandbox Video Generation Prompt Instructions
+>
+> - **What changed:** Updated the LLM prompt instructions in the Sandbox to explicitly require the persona and audio instructions (specifically engaging UGC-style music that sits well under vocal speech, and real human speech with emotions) to be placed at the very top of the generated prompt. Removed all hardcoded stylistic constraints and templates, instructing the LLM instead to choose the best template dynamically from the Film Direction System based on the goal and image.
+> - **Why:** VEO prioritizes instructions at the top of the prompt. Dynamic template selection ensures the output aligns accurately with the content rather than being forced into a generic mold.
+> - **Files:**
+>   - `src/app/api/sandbox/generate-scripts/route.ts`
+
+---
+
+### ✨ Features
+
+---
+
+> ### Background Sandbox Video Generation on Refresh
+>
+> - **What changed:** Sandbox generation API routes now upload videos to Vercel Blob and update Firestore directly when the API completes execution on the server. The client polling loop automatically resumes pending generation steps if the user refreshed the page. Removed giant full-response logging objects and instead log Vercel Blob upload links and concise API status steps.
+> - **Why:** A page refresh or navigation away from the Sandbox previously caused the `fetch` request to cancel, resulting in lost video files even if the backend completed them. This makes generation resilient to connection drops.
+> - **Files:**
+>   - `src/lib/sandbox-updater.ts`
+>   - `src/app/api/script/generate-video/image-refs/route.ts`
+>   - `src/app/api/script/generate-video/vertex/image-refs/route.ts`
+>   - `src/app/api/script/extend-video/gemini/route.ts`
+>   - `src/app/api/script/extend-video/vertex/route.ts`
+>   - `src/services/vertex-video.ts`
+>   - `src/app/sandbox/page.tsx`
+
+---
+
+### 🐛 Fixes
+
+---
+
+> ### Improved Veo Dialogue Generation Prompting
+>
+> - **What changed:** Updated the script generation prompt in the Sandbox to enforce a strict "dialogue: " prefix for spoken text. Also added rules to ensure no hyphens or special characters appear inside the dialogue, and required that any moods, acting notes, or directions be placed on separate lines away from the dialogue itself.
+> - **Why:** Veo models require explicit "dialogue: " formatting to properly trigger lipsync and speech, and special characters or inline acting notes within the dialogue string can cause the model to stumble, mispronounce, or fail generation entirely.
+> - **Files:**
+>   - `src/app/api/sandbox/generate-scripts/route.ts`
+
+---
+
+### 💅 Styling and UI Improvements
+
+---
+
+> ### Reorder Sandbox UI Panels
+>
+> - **What changed:** Moved the "Avatar Image" panel to be positioned right above the "Script & Dialogue" panel in the Sandbox page layout.
+> - **Why:** Makes logical sense that the user sets their goal and reference image first, before clicking "Generate Script", aligning the visual flow with the generation sequence.
+> - **Files:**
+>   - `src/app/sandbox/page.tsx`
+
+---
+
+## 🗓️ **2026-05-03**
+
+---
+
+### 🐛 Fixes
+
+---
+
+> ### Fix Firestore not initialized error
+>
+> - **What changed:** Replaced thrown error with a console.warn and graceful fallback when Firestore is not initialized.
+> - **Why:** Prevents ugly error stack traces in the server logs.
+> - **Files:**
+>   - `src/app/api/intelligence/film-direction/route.ts`
+
+## 🗓️ **2026-05-04**
+
+---
+
+### ✨ Features
+
+---
+
+> ### Pull Film Direction System & Cinematic Script Generation
+>
+> - **What changed:** Integrated the Film Direction System into the Sandbox page. It is fetched silently on mount and used to dynamically generate a single shared visual video prompt alongside per-clip dialogues, utilizing the uploaded avatar image as a reference point.
+> - **Why:** Replaces manual video prompting with an automated cinematic AI output based on a predefined Film Direction system for consistent styling and lighting.
+> - **Files:**
+>   - `src/app/sandbox/page.tsx`
+>   - `src/app/api/sandbox/generate-scripts/route.ts`
+>   - `src/app/api/intelligence/film-direction/route.ts`
+
+---
+
+### 🧹 Refactors
+
+---
+
+> ### Remove Obsolete Routes & Services
+>
+> - **What changed:** Cleaned up dead code by removing `generate-bridge`, `stitch`, and `extract-frames` API routes, as well as `generateReelFirstLastFrame()` service functions.
+> - **Why:** The legacy bridge and stitch approach has been completely replaced by the new extend chain mechanism.
+> - **Files:**
+>   - `src/app/api/sandbox/generate-bridge/route.ts`
+>   - `src/app/api/sandbox/stitch/route.ts`
+>   - `src/app/api/sandbox/extract-frames/route.ts`
+>   - `src/services/gemini-video.ts`
+>   - `Architecture.md`
+
+---
+
+### ✨ Features
+
+---
+
+> ### Sandbox Script-Driven Flow & Duration Linking
+>
+> - **What changed:** Replaced the explicit video count control with a single target duration slider that dynamically calculates `clipCount` (8s = 1 clip, 15s = 2 clips, etc.). The left panel is now entirely script-driven: AI-generated dialogues dynamically render exactly `clipCount` editable cards. A permanent `Default Video Prompt` was introduced, synced with `localStorage`, and the final video prompt is assembled server-side using `{defaultPrompt}. {clipDialogue}` logic. Hardcoded limits were removed, relying solely on formula calculations.
+> - **Why:** Improves UX by simplifying the configuration to only a Goal and Duration, while making the generated dialogue components the primary visual anchor for generating consecutive short-form video clips automatically.
+> - **Files:**
+>   - `src/app/sandbox/page.tsx`
+>   - `src/app/api/sandbox/generate-scripts/route.ts`
+>   - `src/app/api/script/generate-video/image-refs/route.ts`
+>   - `src/app/api/script/generate-video/vertex/image-refs/route.ts`
+>   - `src/app/sandbox/constants.ts`
+
+---
+
+> ### Sandbox Run History — Persistent Runs with Thread UI
+>
+> - **What changed:** Sandbox video generation now groups all clips, bridges, and the final stitched video into a single **run document** (`run_1`, `run_2`, etc.) under the `sandbox/{id}/generatedVideos` subcollection instead of saving each video as a separate flat doc. Clips and bridges are appended incrementally via Firestore `arrayUnion` as each one completes. The right-side output column now displays a **thread UI**: the active generation is shown inline as "Current Run" with the bridge/stitch section below it, and all completed runs are listed as collapsible cards in reverse chronological order with model name, clip count, and relative timestamp in the header.
+> - **Why:** Provides a persistent, structured history of all generation attempts per sandbox, makes it easy to compare runs, and eliminates orphaned per-clip docs in Firestore.
+> - **Files:**
+>   - `src/app/sandbox/page.tsx`
+
+---
+
+> ### Store Sandbox Videos in Vercel Blob and Firestore `generatedVideos` Subcollection
+>
+> - **What changed:** Sandbox flow now uploads generated video clips, bridges, and stitched outputs directly to Vercel Blob and saves their links to a new `generatedVideos` subcollection instead of `videos`. Also added vertex output links to server logs.
+> - **Why:** To persist all sandbox video assets centrally under Vercel Blob and track them accurately in a dedicated Firestore subcollection.
+> - **Files:**
+>   - `src/app/sandbox/page.tsx`
+>   - `src/services/vertex-video.ts`
+
+---
+
+### 🐛 Fixes
+
+---
+
+> ### Fetch Film Direction System via Firebase Client SDK
+>
+> - **What changed:** Replaced the `/api/intelligence/film-direction` API route fetch with a direct Firestore client SDK `getDoc` call on the `intelligence/filmDirectionSystem` document.
+> - **Why:** The Admin SDK route was failing locally due to `FIREBASE_SERVICE_ACCOUNT_BASE64` not being set, and there's no reason to proxy a read-only config document through the server.
+> - **Files:**
+>   - `src/app/sandbox/page.tsx`
+
+---
+
+> ### Improve Veo Video Generation Pacing and Behavior
+>
+> - **What changed:** Injected prompt instructions for conversational pacing (2.5-3 words/sec), hard stopping after scripted lines, and added a negative prompt to prevent mumbling/trailing speech.
+> - **Why:** Ensures avatar speaks at a natural pace without unnatural lip movement continuing after dialogue finishes during video generation and extension.
+> - **Files:**
+>   - `src/services/gemini-video.ts`
+>   - `src/services/vertex-video.ts`
+>   - `src/app/api/script/extend-video/gemini/route.ts`
+>   - `src/app/api/script/extend-video/vertex/route.ts`
+>   - `src/app/api/script/generate-video/text/route.ts`
+>   - `src/app/api/script/generate-video/image-direct/route.ts`
+>   - `src/app/api/script/generate-video/image-refs/route.ts`
+>   - `src/app/api/script/generate-video/vertex/text/route.ts`
+>   - `src/app/api/script/generate-video/vertex/image-direct/route.ts`
+>   - `src/app/api/script/generate-video/vertex/image-refs/route.ts`
+
+---
+
+> ### Sandbox DB Initialisation & Vertex Image Ref Enums Fix
+>
+> - **What changed:** Fixed the sandbox initialization logic to prevent overwriting saved db values (e.g. aspect ratio, resolution) with defaults on page reload. Additionally, fixed the image payload when executing `vertex/image-refs` logic to use the correct `VideoGenerationReferenceType.ASSET` enum (from the Google GenAI SDK) rather than falling back to a string, which caused `image is empty` payload errors. Finally, updated the video generation payloads to explicitly pass `aspectRatio` and `resolution` state properties dynamically instead of using defaults.
+> - **Why:** Preserves the user's sandbox config parameters across sessions, resolves 400 invalid argument errors when sending images to the new Vertex AI models, and correctly translates user-configured resolution bounds down to the API correctly instead of defaulting to 720p.
+> - **Files:**
+>   - `src/app/sandbox/page.tsx`
+>   - `src/services/vertex-video.ts`
+
+---
+
+> ### Fix Sandbox Bridge View Missing on Reload
+>
+> - **What changed:** Updated sandbox page logic to correctly populate the active generating context (`videoSlots`) and associated bridge slots dynamically upon initial page load if the sandbox instance is fetched and clips already exist. The historical "Generated Bridges" view has also been integrated into the expanded Run History panel.
+> - **Why:** When users refreshed the page or navigated away, the current "Bridge Pairs Visualization" block would completely disappear because the UI state that maps extracted frames and bridges to video clips was lost, forcing users to recreate runs.
+> - **Files:**
+>   - `src/app/sandbox/page.tsx`
+
+---
+
+## 🗓️ **2026-05-03**
+
+---
+
+### ✨ Features
+
+---
+
+> ### Sandbox Instance Creation and Centralized Storage
+>
+> - **What changed:** Introduced a "Create Sandbox Instance" flow requiring users to initialize a Sandbox before executing generation tasks. Mirrored the provider and model configuration from the script panel to the sandbox, replaced the video count input with a target duration slider, and ensured all operations (goal scripts, configurations, and reference image uploads) automatically update and sync directly to the parent Sandbox document in Firestore.
+> - **Why:** Unifies provider settings, prevents accidental generation with missing state, provides intuitive duration controls, and establishes a single source of truth for the entire sandbox workflow directly synced to Firestore in real-time.
+> - **Files:**
+>   - `src/app/sandbox/page.tsx`
+
+---
+
+> ### Sandbox Bridge Video Generation & Automated Stitching
+>
+> - **What changed:** Added new endpoints to generate transition video clips between extracted frame pairs using Veo 3.1 (`/api/sandbox/generate-bridge`), to automatically stitch them together with the generated avatar clips via FFmpeg (`/api/sandbox/stitch`), and to serve the resulting compiled mp4 (`/api/sandbox/output/[filename]`). Implemented frontend logic to trigger bridge generation in parallel, visualize statuses, and display the final compiled video.
+> - **Why:** Allows users to create seamless visual transitions between multiple speaking segments, resulting in a cohesive multi-shot final video directly from the sandbox.
+> - **Files:**
+>   - `src/services/gemini-video.ts`
+>   - `src/services/vertex-video.ts`
+>   - `src/app/api/sandbox/generate-bridge/route.ts`
+>   - `src/app/api/sandbox/stitch/route.ts`
+>   - `src/app/api/sandbox/output/[filename]/route.ts`
+>   - `src/app/sandbox/page.tsx`
+
+---
+
+> ### Sandbox Frame Extraction & Bridge Visualization
+>
+> - **What changed:** Added automated first/last frame extraction using ffmpeg and visualising bridge pairs in the Sandbox route. A "Generate Bridges & Stitch" button was added that unlocks once all frames are extracted.
+> - **Why:** Allows users to review clip connection points visually before committing to generating bridge clips.
+> - **Files:**
+>   - `src/app/api/sandbox/extract-frames/route.ts`
+>   - `src/app/sandbox/page.tsx`
+
+---
+
+> ### Sandbox Video Generation from Avatar Image
+>
+> - **What changed:** Connected the "Create Videos" button in the Sandbox page to generate `videoCount` parallel videos using the chosen provider (Gemini or Vertex) with the uploaded avatar image. Video outputs are automatically uploaded to Vercel Blob and tracking data is stored in the new `sandbox` and `sandbox/{id}/videos` Firestore collections. Added support for single-clip regeneration. Added video quality selector (720p, 1080p, 4k) which persists in config.
+> - **Why:** Completes the end-to-end sandbox functionality, allowing manual testing of avatar video generation without running the full script pipeline.
+> - **Files:**
+>   - `src/lib/types.ts`
+>   - `src/app/sandbox/page.tsx`
+
+---
+
+### 🐛 Fixes
+
+---
+
+> ### Fix Sandbox Layout Hiding Generate Button
+>
+> - **What changed:** Added `shrink-0` to the "Generate Script" button and `min-h-0` to the left column flex container in the Sandbox page to prevent the button from being pushed out of view or squished by expanding textareas.
+> - **Why:** The script and dialogue textareas were expanding and hiding the generation button due to standard flexbox behavior in grid layouts.
+> - **Files:**
+>   - `src/app/sandbox/page.tsx`
+
+---
+
 ## 🗓️ **2026-05-02**
 
 ---

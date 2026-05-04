@@ -37,6 +37,7 @@ The app has three distinct product areas accessible via a left sidebar:
 | --------------- | -------------- | --------------------------------------------------------------------------------------------- |
 | **Avatar**      | `/avatar/new`  | Generate an AI avatar face image using Gemini; push to library                                |
 | **Script**      | `/script`      | Write, manage and generate video shots; attach reference images; trigger Veo video generation |
+| **Sandbox**     | `/sandbox`     | Automated test environment for script generation and validation                               |
 | **Video Maker** | `/video-maker` | Browser-based NLE editor — arrange video/audio clips on a timeline and export via ffmpeg      |
 
 ### Build Status
@@ -149,6 +150,10 @@ The app has three distinct product areas accessible via a left sidebar:
 │  │  POST /api/avatar/generate          → Gemini avatar image        │     │
 │  │  POST /api/script/generate          → Gemini script via LangChain│     │
 │  │  POST /api/script/generate-video    → Veo 3.1 video per shot     │     │
+│  │  POST /api/script/extend-video      → Extend existing video      │     │
+│  │  POST /api/sandbox/generate-scripts → Automate script generation │     │
+│  │  GET  /api/sandbox/output/[file]    → Read generated scripts     │     │
+│  │  POST /api/intelligence/film-dir... → Film direction AI analysis │     │
 │  │  POST /api/video-maker/upload       → Save media to disk         │     │
 │  │  POST /api/video-maker/export       → ffmpeg clip assembly       │     │
 │  │  POST /api/pipeline/create          → Create job (TBD)           │     │
@@ -212,6 +217,10 @@ ai-avatar-content/
 │   │   │   └── new/
 │   │   │       └── page.tsx                    # ✅ Avatar creation (client)
 │   │   │
+│   │   ├── sandbox/
+│   │   │   ├── page.tsx                        # ✅ Automated script testing UI
+│   │   │   └── constants.ts                    # Constants for sandbox mode
+│   │   │
 │   │   ├── script/
 │   │   │   ├── page.tsx                        # ✅ Shot editor + Veo generation (client)
 │   │   │   └── constants.ts                    # PODCAST_SHOTS defaults, character/set prompts
@@ -237,12 +246,21 @@ ai-avatar-content/
 │   │   └── api/
 │   │       ├── avatar/
 │   │       │   └── generate/route.ts           # ✅ POST — Gemini avatar image
+│   │       ├── sandbox/
+│   │       │   ├── generate-scripts/route.ts   # ✅ POST — Generates batches of scripts
+│   │       │   └── output/[filename]/route.ts  # ✅ GET — Read sandbox output
+│   │       ├── intelligence/
+│   │       │   └── film-direction/route.ts     # ✅ POST — AI critique of video output
 │   │       ├── script/
 │   │       │   ├── generate/route.ts           # ✅ POST — Gemini script via LangChain
+│   │       │   ├── extend-video/
+│   │       │   │   ├── gemini/route.ts         # ✅ POST — Extend video via Gemini
+│   │       │   │   └── vertex/route.ts         # ✅ POST — Extend video via Vertex
 │   │       │   └── generate-video/
 │   │       │       ├── text/route.ts           # ✅ POST — Veo text-only generation
 │   │       │       ├── image-direct/route.ts   # ✅ POST — Veo image-direct (Lite only)
-│   │       │       └── image-refs/route.ts     # ✅ POST — Veo reference images (Fast/Pro)
+│   │       │       ├── image-refs/route.ts     # ✅ POST — Veo reference images (Fast/Pro)
+│   │       │       └── evolink/route.ts        # ✅ POST — Evolink (Kling/Seedance/Grok)
 │   │       ├── video-maker/
 │   │       │   ├── upload/route.ts             # ✅ POST — Save media to public/uploads
 │   │       │   └── export/route.ts             # ✅ POST — ffmpeg clip assembly
@@ -408,6 +426,7 @@ Client automatically routes each shot to the correct API endpoint based on model
 | `/`                                            | RSC page         | ✅ exists | Home                            |
 | `/avatar/new`                                  | Client Component | ✅ done   | Avatar creation                 |
 | `/script`                                      | Client Component | ✅ done   | Shot editor + Veo generation    |
+| `/sandbox`                                     | Client Component | ✅ done   | Automated script testing        |
 | `/video-maker`                                 | Client Component | ✅ done   | NLE timeline editor             |
 | `/pipeline/[id]`                               | Client Component | 🔲 TBD    | Status polling + video output   |
 | `POST /api/avatar/generate`                    | API Route        | ✅ done   | Gemini avatar image             |

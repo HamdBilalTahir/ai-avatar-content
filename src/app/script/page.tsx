@@ -492,9 +492,31 @@ export default function ScriptPage() {
     const newImages = files.map((file) => ({
       id: Math.random().toString(36).substring(7),
       file,
-      previewUrl: URL.createObjectURL(file),
+      previewUrl: URL.createObjectURL(file), // temporary full-size; replaced by thumbnail below
     }));
     setImages((prev) => [...prev, ...newImages]);
+
+    // Generate small thumbnails (≤300px, 65% quality) for display — keeps raw file intact for API
+    newImages.forEach(({ id, file }) => {
+      const blobUrl = URL.createObjectURL(file);
+      const img = new window.Image();
+      img.onload = () => {
+        const scale = Math.min(1, 300 / Math.max(img.width, img.height));
+        const w = Math.round(img.width * scale);
+        const h = Math.round(img.height * scale);
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        canvas.getContext('2d')!.drawImage(img, 0, 0, w, h);
+        const thumbUrl = canvas.toDataURL('image/jpeg', 0.65);
+        URL.revokeObjectURL(blobUrl);
+        setImages((prev) =>
+          prev.map((i) => (i.id === id ? { ...i, previewUrl: thumbUrl } : i))
+        );
+      };
+      img.onerror = () => URL.revokeObjectURL(blobUrl);
+      img.src = blobUrl;
+    });
 
     newImages.forEach((img) => {
       const formData = new FormData();
@@ -971,6 +993,7 @@ export default function ScriptPage() {
                           alt="Library Item"
                           fill
                           unoptimized
+                          loading="lazy"
                           className="object-cover"
                         />
                         {isSelected && (

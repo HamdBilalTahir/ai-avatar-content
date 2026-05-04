@@ -123,3 +123,30 @@ export interface GeneratedVideoDocument {
   blobUrl: string; // Later will be Vercel Blob URL
   createdAt?: any;
 }
+
+export interface SandboxDocument {
+  id: string;
+  userId: string;
+  goal: string;
+  scripts: { id: number; text: string }[];
+  config: {
+    videoCount: number;
+    aspectRatio: string;
+    selectedModelId: string;
+    videoQuality: string;
+    serviceProvider: string;
+  };
+  status: 'idle' | 'generating' | 'done' | 'error';
+  createdAt?: any;
+}
+
+export interface SandboxVideoDocument {
+  videoId: string;
+  sandboxId: string;
+  userId: string;
+  blobUrl: string;
+  provider: string;
+  status: 'idle' | 'generating' | 'done' | 'error';
+  prompt: string;
+  createdAt?: any;
+}

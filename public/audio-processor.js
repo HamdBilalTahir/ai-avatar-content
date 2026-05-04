@@ -1,4 +1,3 @@
-/* global AudioWorkletProcessor, registerProcessor */
 class PitchShiftProcessor extends AudioWorkletProcessor {
   constructor() {
     super();

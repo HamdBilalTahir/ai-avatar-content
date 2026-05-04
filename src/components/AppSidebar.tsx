@@ -10,6 +10,7 @@ import {
   Settings,
   ChevronLeft,
   ChevronRight,
+  TestTubes,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/lib/AuthContext';
@@ -43,6 +44,12 @@ const NAV_GROUPS = [
         label: 'Scripts',
         match: (p: string) => p.startsWith('/script'),
         icon: FileText,
+      },
+      {
+        href: '/sandbox',
+        label: 'Sandbox',
+        match: (p: string) => p.startsWith('/sandbox'),
+        icon: TestTubes,
       },
       {
         href: '/results',

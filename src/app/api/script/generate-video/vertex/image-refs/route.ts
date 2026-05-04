@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { generateVertexImageRefs } from '@/services/vertex-video';
 import { resolveOutputPath } from '@/lib/video-output';
+import { processSandboxCompletion } from '@/lib/sandbox-updater';
 import fs from 'fs/promises';
 
 export const maxDuration = 300;
@@ -9,6 +10,8 @@ export async function POST(req: NextRequest) {
   try {
     const {
       prompt,
+      defaultPrompt,
+      clipDialogue,
       modelName,
       duration,
       resolution,
@@ -18,11 +21,19 @@ export async function POST(req: NextRequest) {
       shotNumber,
       existingCount,
       referenceImages,
+      sandboxId,
+      runId,
+      stepNumber,
     } = await req.json();
 
-    if (!prompt)
+    const finalPrompt =
+      defaultPrompt && clipDialogue
+        ? `${defaultPrompt}. ${clipDialogue}`
+        : prompt;
+
+    if (!finalPrompt)
       return NextResponse.json(
-        { error: 'prompt is required' },
+        { error: 'prompt or defaultPrompt/clipDialogue is required' },
         { status: 400 }
       );
     if (!vertexKey)
@@ -41,8 +52,22 @@ export async function POST(req: NextRequest) {
       existingCount ?? 0
     );
 
-    await generateVertexImageRefs({
-      prompt,
+    const resolvedReferenceImages = referenceImages.map((img: any) => ({
+      base64: img.base64 || img.data,
+      mimeType: img.mimeType || img.mime_type || 'image/jpeg',
+    }));
+
+    const PACING_INSTRUCTION =
+      'Speak at a natural conversational pace of approximately 2.5 to 3 words per second. No pauses between words.';
+    const HARD_STOP_INSTRUCTION =
+      'Stop all dialogue, mouth movement, and speech immediately when the scripted lines are finished. Hold a neutral expression after speaking.';
+    const NEGATIVE_PROMPT =
+      'slow speech, long pauses, continued talking after dialogue ends, extra lip movement, mumbling';
+
+    const enhancedPrompt = `${finalPrompt}\n\nInstructions:\n- ${PACING_INSTRUCTION}\n- ${HARD_STOP_INSTRUCTION}`;
+
+    const res = await generateVertexImageRefs({
+      prompt: enhancedPrompt,
       outputName: outputPath,
       modelName,
       duration,
@@ -50,19 +75,37 @@ export async function POST(req: NextRequest) {
       aspectRatio,
       vertexKeyJson: vertexKey,
       location: vertexLocation || 'us-central1',
-      referenceImages,
+      referenceImages: resolvedReferenceImages,
+      negativePrompt: NEGATIVE_PROMPT,
     });
 
-    const buffer = await fs.readFile(outputPath);
-    return new NextResponse(buffer, {
-      status: 200,
-      headers: {
-        'Content-Type': 'video/mp4',
-        'Content-Length': buffer.byteLength.toString(),
-        'X-Video-Filename': outputFilename,
-        'Cache-Control': 'no-store',
-      },
-    });
+    if (res?.outputName) {
+      const buffer = await fs.readFile(res.outputName);
+      let videoUrl;
+      let videoReferenceUrl;
+      if (sandboxId && runId && stepNumber) {
+        const uploadRes = await processSandboxCompletion({
+          buffer,
+          videoReference: res.videoReference,
+          sandboxId,
+          runId,
+          stepNumber,
+        });
+        videoUrl = uploadRes.videoUrl;
+        videoReferenceUrl = uploadRes.videoReferenceUrl;
+      }
+      return NextResponse.json({
+        video_url: videoUrl,
+        output_name: outputFilename,
+        video_reference: res.videoReference,
+        video_reference_url: videoReferenceUrl,
+      });
+    }
+
+    return NextResponse.json(
+      { error: 'Failed to generate video' },
+      { status: 500 }
+    );
   } catch (error: unknown) {
     console.warn(
       'generate-video/vertex/image-refs error:',

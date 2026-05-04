@@ -68,6 +68,7 @@ type BaseParams = {
   aspectRatio?: string;
   vertexKeyJson: string;
   location?: string;
+  negativePrompt?: string;
 };
 
 function buildClient(credentials: any, location: string) {
@@ -82,12 +83,14 @@ function buildClient(credentials: any, location: string) {
 function buildConfig(
   duration: number | string | undefined,
   resolution: string | undefined,
-  aspectRatio: string | undefined
+  aspectRatio: string | undefined,
+  negativePrompt?: string
 ) {
   return {
     aspectRatio: aspectRatio || '9:16',
     durationSeconds: Number(duration) || 8,
     resolution: resolution || '720p',
+    ...(negativePrompt ? { negativePrompt } : {}),
   };
 }
 
@@ -119,13 +122,18 @@ async function saveVertexVideo(
   operation: any,
   outputName: string,
   credentials: any
-): Promise<string> {
+): Promise<{ outputName: string; videoReference?: any }> {
+  let elapsed = 0;
   while (!operation.done) {
-    console.log('[vertex] Waiting for generation...');
+    console.log(`[vertex] Waiting for generation... ${elapsed}s elapsed`);
     await new Promise((r) => setTimeout(r, 10000));
+    elapsed += 10;
     operation = await ai.operations.getVideosOperation({ operation });
   }
 
+  console.log(
+    `[vertex] Operation finished after ${elapsed}s, processing response...`
+  );
   const response = operation.response;
   if (response?.raiMediaFilteredCount > 0) {
     const reasons =
@@ -135,7 +143,14 @@ async function saveVertexVideo(
   }
 
   const video = response?.generatedVideos?.[0]?.video;
-  if (!video) throw new Error('No video returned from Vertex AI');
+  if (!video) {
+    if (operation.error) {
+      throw new Error(
+        `Vertex AI operation error: ${JSON.stringify(operation.error)}`
+      );
+    }
+    throw new Error('No video returned from Vertex AI');
+  }
 
   await fs.mkdir(path.dirname(outputName), { recursive: true });
 
@@ -149,8 +164,47 @@ async function saveVertexVideo(
     throw new Error('No downloadable content in Vertex AI response');
   }
 
+  if (video.uri) {
+    console.log(`✅ [Vertex AI] Output Link (GCS): ${video.uri}`);
+  }
   console.log(`✅ [Vertex AI] Saved to ${outputName}`);
-  return outputName;
+  return { outputName, videoReference: video };
+}
+
+// ─── Extend Video ─────────────────────────────────────────────────────────────
+
+export async function extendVertexVideo({
+  prompt,
+  outputName,
+  modelName = 'veo-3.1-fast-generate-001',
+  duration,
+  resolution,
+  aspectRatio,
+  vertexKeyJson,
+  location = 'us-central1',
+  videoReference,
+  negativePrompt,
+}: BaseParams & { videoReference: any }) {
+  const credentials = JSON.parse(vertexKeyJson);
+  logConfig(
+    outputName,
+    modelName,
+    duration,
+    resolution,
+    'Extend Video',
+    credentials.project_id,
+    location
+  );
+  console.log(`  - Prompt: ${prompt.substring(0, 50)}...`);
+
+  const ai = buildClient(credentials, location);
+  const operation = await (ai.models.generateVideos as any)({
+    model: modelName,
+    prompt,
+    video: videoReference,
+    config: buildConfig(duration, resolution, aspectRatio, negativePrompt),
+  });
+  return saveVertexVideo(ai, operation, outputName, credentials);
 }
 
 // ─── Text → Video ─────────────────────────────────────────────────────────────
@@ -164,7 +218,8 @@ export async function generateVertexText({
   aspectRatio,
   vertexKeyJson,
   location = 'us-central1',
-}: BaseParams): Promise<string> {
+  negativePrompt,
+}: BaseParams) {
   const credentials = JSON.parse(vertexKeyJson);
   logConfig(
     outputName,
@@ -181,7 +236,7 @@ export async function generateVertexText({
   const operation = await ai.models.generateVideos({
     model: modelName,
     prompt,
-    config: buildConfig(duration, resolution, aspectRatio),
+    config: buildConfig(duration, resolution, aspectRatio, negativePrompt),
   });
   return saveVertexVideo(ai, operation, outputName, credentials);
 }
@@ -198,9 +253,10 @@ export async function generateVertexImageDirect({
   vertexKeyJson,
   location = 'us-central1',
   image,
+  negativePrompt,
 }: BaseParams & {
   image: { base64: string; mimeType: string };
-}): Promise<string> {
+}) {
   const credentials = JSON.parse(vertexKeyJson);
   logConfig(
     outputName,
@@ -219,8 +275,53 @@ export async function generateVertexImageDirect({
     model: modelName,
     prompt,
     image: { imageBytes: image.base64, mimeType: image.mimeType },
-    config: buildConfig(duration, resolution, aspectRatio),
+    config: buildConfig(duration, resolution, aspectRatio, negativePrompt),
   });
+  return saveVertexVideo(ai, operation, outputName, credentials);
+}
+
+// ─── First & Last Frame → Video ───────────────────────────────────────────────
+
+export async function generateVertexFirstLastFrame({
+  prompt,
+  outputName,
+  modelName = 'veo-3.1-fast-generate-001',
+  duration,
+  resolution,
+  aspectRatio,
+  vertexKeyJson,
+  location = 'us-central1',
+  firstFrame,
+  lastFrame,
+  negativePrompt,
+}: BaseParams & {
+  firstFrame: { base64: string; mimeType: string };
+  lastFrame: { base64: string; mimeType: string };
+}) {
+  const credentials = JSON.parse(vertexKeyJson);
+  logConfig(
+    outputName,
+    modelName,
+    duration,
+    resolution,
+    'First & Last Frame → Video',
+    credentials.project_id,
+    location
+  );
+  console.log(`  - Prompt: ${prompt.substring(0, 50)}...`);
+
+  const ai = buildClient(credentials, location);
+  const configObj = {
+    model: modelName,
+    prompt,
+    image: { imageBytes: firstFrame.base64, mimeType: firstFrame.mimeType },
+    config: {
+      ...buildConfig(duration, resolution, aspectRatio, negativePrompt),
+      lastFrame: { imageBytes: lastFrame.base64, mimeType: lastFrame.mimeType },
+    },
+  };
+
+  const operation = await (ai.models.generateVideos as any)(configObj);
   return saveVertexVideo(ai, operation, outputName, credentials);
 }
 
@@ -236,9 +337,10 @@ export async function generateVertexImageRefs({
   vertexKeyJson,
   location = 'us-central1',
   referenceImages,
+  negativePrompt,
 }: BaseParams & {
   referenceImages: { base64: string; mimeType: string }[];
-}): Promise<string> {
+}) {
   const credentials = JSON.parse(vertexKeyJson);
   logConfig(
     outputName,
@@ -257,11 +359,14 @@ export async function generateVertexImageRefs({
     model: modelName,
     prompt,
     config: {
-      ...buildConfig(duration, resolution, aspectRatio),
-      referenceImages: referenceImages.map((img) => ({
-        image: { imageBytes: img.base64, mimeType: img.mimeType },
-        referenceType: VideoGenerationReferenceType.ASSET || 'ASSET',
-      })),
+      ...buildConfig(duration, resolution, aspectRatio, negativePrompt),
+      referenceImages: referenceImages.map(
+        (img) =>
+          ({
+            image: { imageBytes: img.base64, mimeType: img.mimeType },
+            referenceType: VideoGenerationReferenceType.ASSET,
+          }) as any
+      ),
     },
   };
   console.log(
@@ -274,7 +379,10 @@ export async function generateVertexImageRefs({
           ...configObj.config,
           referenceImages: configObj.config.referenceImages.map((r) => ({
             ...r,
-            image: { imageBytes: '<base64...>', mimeType: r.image.mimeType },
+            image: {
+              imageBytes: '<base64...>',
+              mimeType: r.image?.mimeType,
+            },
           })),
         },
       },
