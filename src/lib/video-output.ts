@@ -12,10 +12,8 @@ export function resolveOutputPath(
 } {
   const version = existingCount + 1;
   const outputFilename = shotNumber
-    ? version === 1
-      ? `shot_${shotNumber}.mp4`
-      : `shot_${shotNumber}_(v${version}).mp4`
-    : `shot_unknown_(v${version}).mp4`;
+    ? `shot_${shotNumber}_${version}.mp4`
+    : `shot_unknown_${version}.mp4`;
 
   const outputPath = path.join(TMP_DIR, outputFilename);
 

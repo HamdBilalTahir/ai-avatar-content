@@ -18,7 +18,7 @@ export async function POST(request: Request): Promise<NextResponse> {
 
   if (scriptId && shotId) {
     // Count existing versions server-side so the client's stale state can't cause collisions.
-    const prefix = `Generated Videos/${scriptId}_${shotId}_v`;
+    const prefix = `Generated Videos/${scriptId}_${shotId}_`;
     const { blobs } = await list({ prefix });
     const nextVersion = blobs.length + 1;
     blobPath = `${prefix}${nextVersion}.mp4`;

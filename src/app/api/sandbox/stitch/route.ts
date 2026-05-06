@@ -27,14 +27,18 @@ function runFFmpeg(args: string[]): Promise<void> {
 }
 
 export async function POST(req: NextRequest) {
-  let body: { videoUrls: string[]; filename?: string };
+  let body: { videoUrls: string[]; filename?: string; extractAudio?: boolean };
   try {
     body = await req.json();
   } catch {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
 
-  const { videoUrls, filename = `stitched_${Date.now()}.mp4` } = body;
+  const {
+    videoUrls,
+    filename = `stitched_${Date.now()}.mp4`,
+    extractAudio = false,
+  } = body;
 
   if (!videoUrls || !Array.isArray(videoUrls) || videoUrls.length === 0) {
     return NextResponse.json(
@@ -43,16 +47,15 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  if (videoUrls.length === 1) {
-    return NextResponse.json({ videoUrl: videoUrls[0] }, { status: 200 });
-  }
-
   const outDir = path.join(process.cwd(), 'storage', 'sandbox', 'stitch');
   await mkdir(outDir, { recursive: true });
 
   const tmpFiles: string[] = [];
   const concatListPath = path.join(outDir, `concat_${Date.now()}.txt`);
-  const outputPath = path.join(outDir, `output_${Date.now()}.mp4`);
+  const outputPath = path.join(
+    outDir,
+    `output_${Date.now()}.${extractAudio ? 'mp3' : 'mp4'}`
+  );
   tmpFiles.push(concatListPath);
 
   try {
@@ -77,30 +80,53 @@ export async function POST(req: NextRequest) {
     await writeFile(concatListPath, concatContent);
 
     // Concatenate videos
-    await runFFmpeg([
-      '-y',
-      '-f',
-      'concat',
-      '-safe',
-      '0',
-      '-i',
-      concatListPath,
-      '-c',
-      'copy',
-      outputPath,
-    ]);
+    if (extractAudio) {
+      await runFFmpeg([
+        '-y',
+        '-f',
+        'concat',
+        '-safe',
+        '0',
+        '-i',
+        concatListPath,
+        '-vn', // No video
+        '-acodec',
+        'libmp3lame', // MP3 format
+        '-q:a',
+        '2',
+        outputPath,
+      ]);
+    } else {
+      await runFFmpeg([
+        '-y',
+        '-f',
+        'concat',
+        '-safe',
+        '0',
+        '-i',
+        concatListPath,
+        '-c',
+        'copy',
+        outputPath,
+      ]);
+    }
 
     tmpFiles.push(outputPath);
 
     const fileStream = createReadStream(outputPath);
     // Upload to Vercel blob
-    const blob = await put(`sandbox/${filename}`, fileStream, {
+    const targetFilename = extractAudio
+      ? filename.replace(/\.[^/.]+$/, '') + '.mp3'
+      : filename;
+    const blob = await put(`sandbox/${targetFilename}`, fileStream, {
       access: 'public',
       addRandomSuffix: false,
       allowOverwrite: true,
     });
 
-    return NextResponse.json({ videoUrl: `${blob.url}?t=${Date.now()}` });
+    return NextResponse.json({
+      [extractAudio ? 'audioUrl' : 'videoUrl']: `${blob.url}?t=${Date.now()}`,
+    });
   } catch (err: any) {
     console.error('Stitching error:', err);
     return NextResponse.json(

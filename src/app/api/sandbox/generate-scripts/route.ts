@@ -171,7 +171,7 @@ ${assembledSystem}
 Task: Generate a video prompt based on the provided avatar image and existing dialogues.
 - CRITICAL: Place the persona and audio instructions AT THE VERY TOP of the generated video prompt because VEO prioritizes the top of the prompt
 - Identify the persona of the subject from the avatar image and the goal, and explicitly describe their persona to derive human realism
-- Add instructions for realistic audio: specify the inclusion of engaging UGC-style music (avoid generic AI music) that sits perfectly under vocal speech to attract attention as a reel, along with real human speech with appropriate emotions
+- Add instructions for realistic audio: explicitly specify that there must be NO background music or soundtrack of any kind, only clear real human speech with appropriate emotions
 - A single style template has been pre-selected and provided to you based on the goal, image, and context. Use it as your complete and only visual reference. Do not choose between templates. Do not deviate from the provided template.
 - Follow the constraint stack order exactly when assembling the output: shot size and angle first, then lens and focus, then camera body, then frame rate, then subject and blocking, then environment with all three depth layers specified explicitly as foreground, midground, and background, then lighting quality and direction, then color grade, then grain, then motion blur, then aspect ratio and vertical format rules if applicable, then one single emotional tone word last.
 - Output keywords and short directives only — no prose, no explanations, no section headers, no meta-commentary. The output will be passed directly to Veo as a generation prompt.
@@ -231,7 +231,7 @@ Instructions for Dialogues:
 Instructions for Video Prompt:
 - CRITICAL: Place the persona and audio instructions AT THE VERY TOP of the generated video prompt because VEO prioritizes the top of the prompt
 - Identify the persona of the subject from the avatar image and the goal, and explicitly describe their persona to derive human realism
-- Add instructions for realistic audio: specify the inclusion of engaging UGC-style music (avoid generic AI music) that sits perfectly under vocal speech to attract attention as a reel, along with real human speech with appropriate emotions
+- Add instructions for realistic audio: explicitly specify that there must be NO background music or soundtrack of any kind, only clear real human speech with appropriate emotions
 - A single style template has been pre-selected and provided to you based on the goal, image, and context. Use it as your complete and only visual reference. Do not choose between templates. Do not deviate from the provided template.
 - Follow the constraint stack order exactly when assembling the output: shot size and angle first, then lens and focus, then camera body, then frame rate, then subject and blocking, then environment with all three depth layers specified explicitly as foreground, midground, and background, then lighting quality and direction, then color grade, then grain, then motion blur, then aspect ratio and vertical format rules if applicable, then one single emotional tone word last.
 - Output keywords and short directives only — no prose, no explanations, no section headers, no meta-commentary. The output will be passed directly to Veo as a generation prompt.

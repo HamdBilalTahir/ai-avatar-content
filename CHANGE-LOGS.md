@@ -1,3 +1,112 @@
+## 🗓️ **2026-05-06**
+
+---
+
+### ✨ Features
+
+---
+
+> ### Sandbox Recreate Final Video and Download Audio Options
+>
+> - **What changed:** Added a "Recreate Video" button to the Final Complete Video view in the Sandbox (both active run and history runs). Also added a "Download Audio" option next to the video download button. The backend `/api/sandbox/stitch` route was updated to handle audio extraction (returning an `.mp3` blob).
+> - **Why:** Allows users to manually force a re-stitch of their current clip selections if needed, and to extract just the audio from the finalized stitched video clips.
+> - **Files:**
+>   - `src/app/sandbox/page.tsx`
+>   - `src/app/api/sandbox/stitch/route.ts`
+
+---
+
+### 🐛 Fixes
+
+---
+
+> ### Sandbox Video Stitched Updates
+>
+> - **What changed:** Sandbox stitched video generation now dynamically re-stitches existing clips using the Vercel Blob API explicitly bypassing caching using timestamp querying.
+> - **Why:** When moving between versions of a single clip inside a run, the overall stitched view needed to overwrite and update automatically without a hard refresh.
+> - **Files:**
+>   - `src/app/sandbox/page.tsx`
+>   - `src/app/api/sandbox/stitch/route.ts`
+
+---
+
+> ### Standardize Video Filename Versioning to `_1`, `_2`
+>
+> - **What changed:** Updated the file naming logic in both `src/lib/video-output.ts` and `src/app/api/upload/route.ts` to output versions as `_1.mp4`, `_2.mp4` etc. rather than generating `_v1` or raw `.mp4` for the first run.
+> - **Why:** Makes the versioning extension consistent starting immediately from the first run.
+> - **Files:**
+>   - `src/lib/video-output.ts`
+>   - `src/app/api/upload/route.ts`
+
+---
+
+> ### Explicitly Disallow Background Music in Sandbox Scripts
+>
+> - **What changed:** Updated the system prompt in `src/app/api/sandbox/generate-scripts/route.ts` to explicitly specify that there must be NO background music or soundtrack, only real human speech.
+> - **Why:** To prevent the generated prompt from instructing the LLM to include background music, which could conflict with video generations that should focus purely on voice dialogue.
+> - **Files:**
+>   - `src/app/api/sandbox/generate-scripts/route.ts`
+
+---
+
+> ### Handle Vertex AI Deadline Exceeded Errors Gracefully
+>
+> - **What changed:** Added logic to parse the Vertex AI operation JSON error string (specifically `Deadline exceeded`) in the Sandbox page.
+> - **Why:** When the video generation API returns a failed payload from Vertex AI, the error message was an unreadable JSON string (`Vertex AI operation error: {...}`) which cluttered the UI error states.
+> - **Files:**
+>   - `src/app/sandbox/page.tsx`
+
+---
+
+> ### Fix Unhandled Console Errors During Sandbox Video Generation
+>
+> - **What changed:** Replaced `console.error` with `console.warn` and removed re-throwing of caught errors inside `runStep` in the Sandbox page.
+> - **Why:** When video generation failed (e.g. from a Vertex AI timeout), the application properly updated the UI to show the error but also threw an unhandled error to the console, which would needlessly trigger the Next.js development error overlay.
+> - **Files:**
+>   - `src/app/sandbox/page.tsx`
+
+---
+
+> ### Fix Duration Mismatch Error Disabling Sandbox Generation
+>
+> - **What changed:** Removed the `durationMismatch` validation error and allowed the create videos button to be active even if the script count doesn't match the target duration clip count.
+> - **Why:** Videos that are not extended have different durations, so a strict clip count mismatch shouldn't prevent video generation.
+> - **Files:**
+>   - `src/app/sandbox/page.tsx`
+
+---
+
+### ✨ Features
+
+---
+
+> ### Loading States for Sandbox Generation Prompts
+>
+> - **What changed:** Added skeleton loading UI and "Regenerating..." disabled states to the script dialogues and default video prompt in the Sandbox when a regeneration is triggered.
+> - **Why:** Gives the user immediate visual feedback that a regeneration request is in progress and prevents them from making conflicting edits while waiting for the LLM response.
+> - **Files:**
+>   - `src/app/sandbox/page.tsx`
+
+---
+
+> ### Regenerate Dialogues in Sandbox
+>
+> - **What changed:** Added individual "Regenerate" buttons for each generated dialogue in the Sandbox.
+> - **Why:** Allows users to easily re-roll a specific dialogue line if they are unsatisfied, without regenerating the entire script or prompt.
+> - **Files:**
+>   - `src/app/sandbox/page.tsx`
+
+---
+
+> ### Regenerate Default Video Prompt Visibility Update
+>
+> - **What changed:** Updated the visibility condition for the "Regenerate" button on the Default Video Prompt in the Sandbox to be shown whenever `filmDirectionSystem` and `avatarImage` are present, removing the strict dependency on `isAiGeneratedPrompt`.
+> - **Why:** Allows users to regenerate the default video prompt even if they manually edited the prompt and lost the AI-generated flag.
+> - **Files:**
+>   - `src/app/sandbox/page.tsx`
+
+---
+
 ## 🗓️ **2026-05-05**
 
 ---
