@@ -1,18 +1,1216 @@
-## 🗓️ **2026-05-03**
-
----
-
-### ✨ Features
-
----
-
-> ### Sandbox Video Generation from Avatar Image
->
-> - **What changed:** Connected the "Create Videos" button in the Sandbox page to generate `videoCount` parallel videos using the chosen provider (Gemini or Vertex) with the uploaded avatar image. Video outputs are automatically uploaded to Vercel Blob and tracking data is stored in the new `sandbox` and `sandbox/{id}/videos` Firestore collections. Added support for single-clip regeneration. Added video quality selector (720p, 1080p, 4k) which persists in config.
-> - **Why:** Completes the end-to-end sandbox functionality, allowing manual testing of avatar video generation without running the full script pipeline.
-> - **Files:**
->   - `src/lib/types.ts`
->   - `src/app/sandbox/page.tsx`
-
----
-
+diff --git a/CHANGE-LOGS.md b/CHANGE-LOGS.md
+index c0107a6..882ea40 100644
+--- a/CHANGE-LOGS.md
++++ b/CHANGE-LOGS.md
+@@ -1,3 +1,61 @@
++## 🗓️ **2026-05-05**
++
++---
++
++### ✨ Features
++
++---
++
++> ### Single-Clip Regeneration History & Auto-Stitching
++>
++> - **What changed:** Sandbox steps now maintain a `videoUrlHistory` array and an `activeHistoryIndex`. When 'Extend Video' is 'No', regenerating a clip appends the new version without deleting previous ones. The UI features left/right arrows to cycle through past generations for each step, and changing the active version automatically triggers the backend `/api/sandbox/stitch` endpoint to re-compile the final video.
++> - **Why:** Allows users to experiment with single clip iterations (prompt tweaks or random seeds) and securely compare/restore past versions while keeping the final stitched video continuously synced with their current selections.
++> - **Files:**
++>   - `src/app/sandbox/page.tsx`
++
++---
++
++> ### Add Extend Video Toggle and FFmpeg Stitching API
++>
++> - **What changed:** Added a toggle in the Sandbox to disable extend video APIs and use `image-ref` generation with `ffmpeg` stitching instead.
++> - **Why:** Allows users to choose between native video extension or independent clip generation combined via server-side ffmpeg concat.
++> - **Files:**
++>   - `src/app/sandbox/page.tsx`
++>   - `src/app/api/sandbox/stitch/route.ts`
++
++---
++
++> ### Dynamic Film Direction System Subcollection
++>
++> - **What changed:** Updated film direction system to dynamically fetch `commonRules` and `styles` from Firestore subcollections. `api/sandbox/generate-scripts` now uses `gemini-2.5-flash` to select a single style key based on the image, dialogues, and goal, then dynamically injects explicitly labelled `Common Rules:` and `Selected Style:` into the final prompt.
++> - **Why:** Simplifies the LLM prompt by removing the monolithic document context and ensures the final video generation LLM receives highly targeted style instructions specific to the selected genre without confusion.
++> - **Files:**
++>   - `src/app/api/intelligence/film-direction/route.ts`
++>   - `src/app/api/sandbox/generate-scripts/route.ts`
++>   - `src/app/sandbox/page.tsx`
++>   - `test-selection.ts`
++
++---
++
++### 🐛 Fixes
++
++---
++
++> ### Relocate Veo Constraints to Sandbox Prompt Output
++>
++> - **What changed:** Removed Veo-specific pacing and transition/lighting instructions from the backend video generation API routes (`generate-video` and `extend-video`). These instructions are now explicitly appended to the LLM's output in the `sandbox/generate-scripts` route instead.
++> - **Why:** Moves hardcoded AI constraints out of the infrastructure level and into the visible prompt payload. This ensures that the exact instructions sent to the Veo model are fully transparent and generated correctly upstream during the script creation phase.
++> - **Files:**
++>   - `src/app/api/sandbox/generate-scripts/route.ts`
++>   - `src/app/api/script/generate-video/text/route.ts`
++>   - `src/app/api/script/generate-video/image-refs/route.ts`
++>   - `src/app/api/script/generate-video/image-direct/route.ts`
++>   - `src/app/api/script/extend-video/gemini/route.ts`
++>   - `src/app/api/script/generate-video/vertex/text/route.ts`
++>   - `src/app/api/script/generate-video/vertex/image-refs/route.ts`
++
++---
++
+ ## 🗓️ **2026-05-04**
+ 
+ ---
+diff --git a/diff.txt b/diff.txt
+index 30a9891..e69de29 100644
+--- a/diff.txt
++++ b/diff.txt
+@@ -1,18 +0,0 @@
+-## 🗓️ **2026-05-03**
+-
+----
+-
+-### ✨ Features
+-
+----
+-
+-> ### Sandbox Video Generation from Avatar Image
+->
+-> - **What changed:** Connected the "Create Videos" button in the Sandbox page to generate `videoCount` parallel videos using the chosen provider (Gemini or Vertex) with the uploaded avatar image. Video outputs are automatically uploaded to Vercel Blob and tracking data is stored in the new `sandbox` and `sandbox/{id}/videos` Firestore collections. Added support for single-clip regeneration. Added video quality selector (720p, 1080p, 4k) which persists in config.
+-> - **Why:** Completes the end-to-end sandbox functionality, allowing manual testing of avatar video generation without running the full script pipeline.
+-> - **Files:**
+->   - `src/lib/types.ts`
+->   - `src/app/sandbox/page.tsx`
+-
+----
+-
+diff --git a/src/app/api/intelligence/film-direction/route.ts b/src/app/api/intelligence/film-direction/route.ts
+index 78efea6..84707b7 100644
+--- a/src/app/api/intelligence/film-direction/route.ts
++++ b/src/app/api/intelligence/film-direction/route.ts
+@@ -3,55 +3,65 @@ import { db } from '@/lib/firebase-admin';
+ 
+ export const dynamic = 'force-dynamic';
+ 
++// Module-level cache
++let cachedData: {
++  commonRules: string;
++  styles: { key: string; rules: string }[];
++} | null = null;
++let lastFetchTime = 0;
++
+ export async function GET() {
+   try {
+     if (!db || !db.collection) {
+       console.warn(
+         'Firestore not initialized. Skipping film direction system fetch.'
+       );
+-      return NextResponse.json({ content: null }, { status: 200 });
+-    }
+-
+-    const doc = await db
+-      .collection('intelligence')
+-      .doc('filmDirectionSystem')
+-      .get();
+-
+-    if (!doc.exists) {
+-      console.log('Film direction system document was not found.');
+       return NextResponse.json(
+-        { content: null },
+-        {
+-          status: 200,
+-          headers: {
+-            'Cache-Control': 'public, max-age=3600',
+-          },
+-        }
++        { commonRules: null, styles: null },
++        { status: 200 }
+       );
+     }
+ 
+-    const data = doc.data();
+-    console.log('Fetched film direction system data:', Object.keys(data || {}));
++    // Check cache (valid for 1 hour)
++    if (cachedData && Date.now() - lastFetchTime < 3600 * 1000) {
++      console.log('Returning film direction data from module-level cache.');
++      return NextResponse.json(cachedData, {
++        status: 200,
++        headers: { 'Cache-Control': 'public, max-age=3600' },
++      });
++    }
+ 
+-    const content = data?.filmDirectionSystem || null;
++    const docRef = db.collection('intelligence').doc('filmDirectionSystem');
+ 
+-    if (!content) {
+-      console.log(
+-        'Film direction system content field was not found in document data.'
+-      );
+-    }
++    const commonRulesDoc = await docRef
++      .collection('commonRules')
++      .doc('commonRules')
++      .get();
++
++    const commonRules = commonRulesDoc.exists
++      ? commonRulesDoc.data()?.commonRules || null
++      : null;
++
++    const stylesSnapshot = await docRef.collection('styles').get();
++    const styles = stylesSnapshot.docs.map((d) => ({
++      key: d.id,
++      rules: d.data().rules || '',
++    }));
+ 
++    cachedData = { commonRules, styles };
++    lastFetchTime = Date.now();
++
++    return NextResponse.json(cachedData, {
++      status: 200,
++      headers: {
++        'Cache-Control': 'public, max-age=3600',
++      },
++    });
++  } catch (error) {
++    console.error('Error fetching/parsing film direction system:', error);
+     return NextResponse.json(
+-      { content },
+-      {
+-        status: 200,
+-        headers: {
+-          'Cache-Control': 'public, max-age=3600',
+-        },
+-      }
++      { commonRules: null, styles: null },
++      { status: 200 }
+     );
+-  } catch (error) {
+-    console.error('Error fetching film direction system:', error);
+-    return NextResponse.json({ content: null }, { status: 200 });
+   }
+ }
+diff --git a/src/app/api/sandbox/generate-scripts/route.ts b/src/app/api/sandbox/generate-scripts/route.ts
+index dc22cee..b710ac2 100644
+--- a/src/app/api/sandbox/generate-scripts/route.ts
++++ b/src/app/api/sandbox/generate-scripts/route.ts
+@@ -51,10 +51,12 @@ export async function POST(req: NextRequest) {
+       goalText,
+       clipCount,
+       videoCount,
+-      filmDirectionSystem,
++      commonRules,
+       avatarImageBase64,
+       promptOnlyMode,
+       existingDialogues,
++      styles,
++      selectionContext,
+     } = await req.json();
+ 
+     if (!goalText && !promptOnlyMode) {
+@@ -78,24 +80,95 @@ export async function POST(req: NextRequest) {
+ 
+     const count = clipCount || videoCount || 2;
+ 
+-    if (promptOnlyMode && filmDirectionSystem && avatarImageBase64) {
++    let assembledSystem = commonRules || '';
++    if (styles && styles.length > 0 && selectionContext) {
++      try {
++        const flashLlm = new ChatGoogleGenerativeAI({
++          model: 'gemini-2.5-flash',
++          apiKey: process.env.GEMINI_API_KEY,
++        });
++
++        const availableKeys = styles.map((s: any) => s.key);
++
++        const preSelectionSchema = z.object({
++          selectedKey: z
++            .string()
++            .describe(
++              'The single best matching style key from the available list'
++            ),
++        });
++
++        const preSelectionPrompt = `You are a cinematic director deciding the best visual style for a video.
++Based on the goal, existing dialogues (if any), and the provided reference image (if any), pick the SINGLE most appropriate style key from the available list.
++Do not invent keys. Output only one key that exactly matches one of the available keys.
++
++Context:
++Goal Text: ${selectionContext.goalText}
++Aspect Ratio: ${selectionContext.aspectRatio}
++Has Human Subject: ${selectionContext.hasHumanSubject}
++Is UGC Style: ${selectionContext.isUGC}
++Existing Dialogues: ${existingDialogues ? JSON.stringify(existingDialogues) : 'None'}
++
++Available Style Keys:
++${availableKeys.join(', ')}`;
++
++        const messages: any[] = [];
++        if (avatarImageBase64) {
++          const imageUrl = avatarImageBase64.startsWith('data:')
++            ? avatarImageBase64
++            : `data:image/jpeg;base64,${avatarImageBase64}`;
++
++          messages.push(
++            new HumanMessage({
++              content: [
++                { type: 'text', text: preSelectionPrompt },
++                { type: 'image_url', image_url: { url: imageUrl } },
++              ],
++            })
++          );
++        } else {
++          messages.push({ role: 'user', content: preSelectionPrompt });
++        }
++
++        const parsedPreSelection = await flashLlm
++          .withStructuredOutput(preSelectionSchema)
++          .invoke(messages);
++
++        const selectedKey = parsedPreSelection.selectedKey;
++        const selectedStyle = styles.find(
++          (s: any) => s.key.toLowerCase() === selectedKey.toLowerCase()
++        );
++
++        if (selectedStyle) {
++          console.log(`Selected style key: ${selectedKey}`);
++          assembledSystem = `Common Rules:\n${commonRules || ''}\n\nSelected Style (${selectedKey}):\n${selectedStyle.rules || selectedStyle.content}`;
++        } else {
++          console.warn(`Pre-selection returned unknown key: ${selectedKey}`);
++          assembledSystem = `Common Rules:\n${commonRules || ''}`;
++        }
++      } catch (err) {
++        console.warn('Pre-selection failed, falling back to common rules', err);
++        assembledSystem = commonRules || '';
++      }
++    }
++
++    if (promptOnlyMode && assembledSystem && avatarImageBase64) {
+       const structuredLlm = llm.withStructuredOutput(PromptOnlySchema);
+       const textContent = `You are an expert cinematic director.
+ Film Direction System:
+-${filmDirectionSystem}
++${assembledSystem}
+ 
+ Task: Generate a video prompt based on the provided avatar image and existing dialogues.
+ - CRITICAL: Place the persona and audio instructions AT THE VERY TOP of the generated video prompt because VEO prioritizes the top of the prompt
+ - Identify the persona of the subject from the avatar image and the goal, and explicitly describe their persona to derive human realism
+ - Add instructions for realistic audio: specify the inclusion of engaging UGC-style music (avoid generic AI music) that sits perfectly under vocal speech to attract attention as a reel, along with real human speech with appropriate emotions
+-- Treat the Film Direction System as the cinematic reference for all visual decisions
+-- Review the templates provided in the Film Direction System, choose the one that best resonates with the content/goal, and build the video prompt strictly based on that template.
++- A single style template has been pre-selected and provided to you based on the goal, image, and context. Use it as your complete and only visual reference. Do not choose between templates. Do not deviate from the provided template.
++- Follow the constraint stack order exactly when assembling the output: shot size and angle first, then lens and focus, then camera body, then frame rate, then subject and blocking, then environment with all three depth layers specified explicitly as foreground, midground, and background, then lighting quality and direction, then color grade, then grain, then motion blur, then aspect ratio and vertical format rules if applicable, then one single emotional tone word last.
++- Output keywords and short directives only — no prose, no explanations, no section headers, no meta-commentary. The output will be passed directly to Veo as a generation prompt.
++- Analyse the avatar image for skin tone and select the lighting and color grade choices from the provided style template that are most flattering for that specific skin tone.
++- If the aspect ratio is 9:16, apply the vertical format composition rules from the style template — subject centered or in upper third, action in vertical plane, standard lens only, no anamorphic.
+ - Make sure to include all cinematic details described in the chosen template (camera movements, angles, voice, SFX, camera lens, lighting, etc.).
+-- Output a concise video prompt (no more than a few hundred words) with zero dialogue content. The final output must strictly follow the chosen template from the Film Direction System as your bible, containing only the persona, audio instructions, and the visual style details.
+-- Treat the Film Direction System as the cinematic reference for all visual decisions
+-- Review the templates provided in the Film Direction System, choose the one that best resonates with the content/goal, and build the video prompt strictly based on that template.
+-- Make sure to include all cinematic details described in the chosen template (camera movements, angles, voice, SFX, camera lens, lighting, etc.).
+-- Output a concise video prompt (no more than a few hundred words) with zero dialogue content. The final output must strictly follow the chosen template from the Film Direction System as your bible, containing only the persona, audio instructions, and the visual style details.
++- The final output must strictly follow the template from the Film Direction System, containing only the persona, audio instructions, and the visual style details with zero dialogue content.
+ 
+ Goal Text Context: ${goalText || 'N/A'}
+ Existing Dialogues Context: ${existingDialogues ? JSON.stringify(existingDialogues) : 'None'}`;
+@@ -114,14 +187,26 @@ Existing Dialogues Context: ${existingDialogues ? JSON.stringify(existingDialogu
+       ];
+ 
+       const parsed = await structuredLlm.invoke(messages);
+-      return NextResponse.json({ videoPrompt: parsed.videoPrompt });
++
++      // Server-side Veo injections
++      const PACING_INSTRUCTION =
++        'Speak at a natural conversational pace of approximately 2.5 to 3 words per second. No pauses between words.';
++      const HARD_STOP_INSTRUCTION =
++        'Stop all dialogue, mouth movement, and speech immediately when the scripted lines are finished. Hold a neutral expression after speaking.';
++      const VEO_HARDCODED_INJECTIONS = `Final frame: clean held neutral expression, no fade out, no zoom, no vignette, no transition effect, no dissolve, hard clean stop on final frame.
++Consistency: lighting quality, lighting direction, environment, background, voice tone, skin texture, and color grade must remain identical throughout all segments. No drift permitted between segments or extensions.
++Skin and hair: no specular highlights on hair or face, matte skin rendering, no shine, flat diffused light on skin surface, consistent throughout.`;
++
++      const finalVideoPrompt = `${parsed.videoPrompt}\n\nInstructions:\n- ${PACING_INSTRUCTION}\n- ${HARD_STOP_INSTRUCTION}\n\n${VEO_HARDCODED_INJECTIONS}`;
++
++      return NextResponse.json({ videoPrompt: finalVideoPrompt });
+     }
+ 
+-    if (filmDirectionSystem && avatarImageBase64) {
++    if (assembledSystem && avatarImageBase64) {
+       const structuredLlm = llm.withStructuredOutput(AdvancedScriptSchema);
+       const textContent = `You are an expert scriptwriter and cinematic director for short-form video content.
+ Film Direction System:
+-${filmDirectionSystem}
++${assembledSystem}
+ 
+ Goal: ${goalText}
+ Task: 
+@@ -137,11 +222,13 @@ Instructions for Video Prompt:
+ - CRITICAL: Place the persona and audio instructions AT THE VERY TOP of the generated video prompt because VEO prioritizes the top of the prompt
+ - Identify the persona of the subject from the avatar image and the goal, and explicitly describe their persona to derive human realism
+ - Add instructions for realistic audio: specify the inclusion of engaging UGC-style music (avoid generic AI music) that sits perfectly under vocal speech to attract attention as a reel, along with real human speech with appropriate emotions
+-- Treat the Film Direction System as the cinematic reference for all visual decisions
+-- Analyse the avatar image for skin tone and recommend appropriate lighting and color grade from Module 1I and 1K of the system
+-- Review the templates provided in the Film Direction System, choose the one that best resonates with the content/goal, and build the video prompt strictly based on that template.
++- A single style template has been pre-selected and provided to you based on the goal, image, and context. Use it as your complete and only visual reference. Do not choose between templates. Do not deviate from the provided template.
++- Follow the constraint stack order exactly when assembling the output: shot size and angle first, then lens and focus, then camera body, then frame rate, then subject and blocking, then environment with all three depth layers specified explicitly as foreground, midground, and background, then lighting quality and direction, then color grade, then grain, then motion blur, then aspect ratio and vertical format rules if applicable, then one single emotional tone word last.
++- Output keywords and short directives only — no prose, no explanations, no section headers, no meta-commentary. The output will be passed directly to Veo as a generation prompt.
++- Analyse the avatar image for skin tone and select the lighting and color grade choices from the provided style template that are most flattering for that specific skin tone.
++- If the aspect ratio is 9:16, apply the vertical format composition rules from the style template — subject centered or in upper third, action in vertical plane, standard lens only, no anamorphic.
+ - Make sure to include all cinematic details described in the chosen template (camera movements, angles, voice, SFX, camera lens, lighting, etc.).
+-- Output a concise video prompt (no more than a few hundred words) with zero dialogue content. The final output must strictly follow the chosen template from the Film Direction System as your bible, containing only the persona, audio instructions, and the visual style details.`;
++- The final output must strictly follow the template from the Film Direction System, containing only the persona, audio instructions, and the visual style details with zero dialogue content.`;
+ 
+       const imageUrl = avatarImageBase64.startsWith('data:')
+         ? avatarImageBase64
+@@ -158,9 +245,20 @@ Instructions for Video Prompt:
+ 
+       const parsed = await structuredLlm.invoke(messages);
+ 
++      // Server-side Veo injections
++      const PACING_INSTRUCTION =
++        'Speak at a natural conversational pace of approximately 2.5 to 3 words per second. No pauses between words.';
++      const HARD_STOP_INSTRUCTION =
++        'Stop all dialogue, mouth movement, and speech immediately when the scripted lines are finished. Hold a neutral expression after speaking.';
++      const VEO_HARDCODED_INJECTIONS = `Final frame: clean held neutral expression, no fade out, no zoom, no vignette, no transition effect, no dissolve, hard clean stop on final frame.
++Consistency: lighting quality, lighting direction, environment, background, voice tone, skin texture, and color grade must remain identical throughout all segments. No drift permitted between segments or extensions.
++Skin and hair: no specular highlights on hair or face, matte skin rendering, no shine, flat diffused light on skin surface, consistent throughout.`;
++
++      const finalVideoPrompt = `${parsed.videoPrompt}\n\nInstructions:\n- ${PACING_INSTRUCTION}\n- ${HARD_STOP_INSTRUCTION}\n\n${VEO_HARDCODED_INJECTIONS}`;
++
+       return NextResponse.json({
+         dialogues: parsed.dialogues,
+-        videoPrompt: parsed.videoPrompt,
++        videoPrompt: finalVideoPrompt,
+       });
+     }
+ 
+diff --git a/src/app/api/script/extend-video/gemini/route.ts b/src/app/api/script/extend-video/gemini/route.ts
+index 41a3250..301c22a 100644
+--- a/src/app/api/script/extend-video/gemini/route.ts
++++ b/src/app/api/script/extend-video/gemini/route.ts
+@@ -6,6 +6,7 @@ export const maxDuration = 300;
+ 
+ import fs from 'fs/promises';
+ import { processSandboxCompletion } from '@/lib/sandbox-updater';
++import { VEO_HARDCODED_INJECTIONS } from '@/lib/veo-injections';
+ 
+ export async function POST(req: Request) {
+   try {
+@@ -71,14 +72,10 @@ export async function POST(req: Request) {
+       : `${jobId}_step_${stepNumber}`;
+     const outputName = `/tmp/generated/sandbox_${outputId}.mp4`;
+ 
+-    const PACING_INSTRUCTION =
+-      'Speak at a natural conversational pace of approximately 2.5 to 3 words per second. No pauses between words.';
+-    const HARD_STOP_INSTRUCTION =
+-      'Stop all dialogue, mouth movement, and speech immediately when the scripted lines are finished. Hold a neutral expression after speaking.';
+     const NEGATIVE_PROMPT =
+       'slow speech, long pauses, continued talking after dialogue ends, extra lip movement, mumbling';
+ 
+-    const enhancedPrompt = `${prompt}\n\nInstructions:\n- ${PACING_INSTRUCTION}\n- ${HARD_STOP_INSTRUCTION}`;
++    const enhancedPrompt = `${prompt}\n\n${VEO_HARDCODED_INJECTIONS}`;
+ 
+     const result = await extendReelVideo({
+       prompt: enhancedPrompt,
+diff --git a/src/app/api/script/generate-video/image-direct/route.ts b/src/app/api/script/generate-video/image-direct/route.ts
+index 47701ab..2f24d31 100644
+--- a/src/app/api/script/generate-video/image-direct/route.ts
++++ b/src/app/api/script/generate-video/image-direct/route.ts
+@@ -1,6 +1,7 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ import { generateReelImageDirect } from '@/services/gemini-video';
+ import { resolveOutputPath } from '@/lib/video-output';
++import { VEO_HARDCODED_INJECTIONS } from '@/lib/veo-injections';
+ import fs from 'fs/promises';
+ 
+ export async function POST(req: NextRequest) {
+@@ -32,14 +33,10 @@ export async function POST(req: NextRequest) {
+       existingCount ?? 0
+     );
+ 
+-    const PACING_INSTRUCTION =
+-      'Speak at a natural conversational pace of approximately 2.5 to 3 words per second. No pauses between words.';
+-    const HARD_STOP_INSTRUCTION =
+-      'Stop all dialogue, mouth movement, and speech immediately when the scripted lines are finished. Hold a neutral expression after speaking.';
+     const NEGATIVE_PROMPT =
+       'slow speech, long pauses, continued talking after dialogue ends, extra lip movement, mumbling';
+ 
+-    const enhancedPrompt = `${prompt}\n\nInstructions:\n- ${PACING_INSTRUCTION}\n- ${HARD_STOP_INSTRUCTION}`;
++    const enhancedPrompt = `${prompt}\n\n${VEO_HARDCODED_INJECTIONS}`;
+ 
+     const res = await generateReelImageDirect({
+       prompt: enhancedPrompt,
+diff --git a/src/app/api/script/generate-video/image-refs/route.ts b/src/app/api/script/generate-video/image-refs/route.ts
+index 368c30f..9005a07 100644
+--- a/src/app/api/script/generate-video/image-refs/route.ts
++++ b/src/app/api/script/generate-video/image-refs/route.ts
+@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
+ import { generateReelImageRefs } from '@/services/gemini-video';
+ import { resolveOutputPath } from '@/lib/video-output';
+ import { processSandboxCompletion } from '@/lib/sandbox-updater';
++import { VEO_HARDCODED_INJECTIONS } from '@/lib/veo-injections';
+ import fs from 'fs/promises';
+ 
+ export async function POST(req: NextRequest) {
+@@ -48,14 +49,10 @@ export async function POST(req: NextRequest) {
+       mimeType: img.mimeType || img.mime_type || 'image/jpeg',
+     }));
+ 
+-    const PACING_INSTRUCTION =
+-      'Speak at a natural conversational pace of approximately 2.5 to 3 words per second. No pauses between words.';
+-    const HARD_STOP_INSTRUCTION =
+-      'Stop all dialogue, mouth movement, and speech immediately when the scripted lines are finished. Hold a neutral expression after speaking.';
+     const NEGATIVE_PROMPT =
+       'slow speech, long pauses, continued talking after dialogue ends, extra lip movement, mumbling';
+ 
+-    const enhancedPrompt = `${finalPrompt}\n\nInstructions:\n- ${PACING_INSTRUCTION}\n- ${HARD_STOP_INSTRUCTION}`;
++    const enhancedPrompt = `${finalPrompt}\n\n${VEO_HARDCODED_INJECTIONS}`;
+ 
+     const res = await generateReelImageRefs({
+       prompt: enhancedPrompt,
+diff --git a/src/app/api/script/generate-video/vertex/text/route.ts b/src/app/api/script/generate-video/vertex/text/route.ts
+index 0b6fe0a..8bd989a 100644
+--- a/src/app/api/script/generate-video/vertex/text/route.ts
++++ b/src/app/api/script/generate-video/vertex/text/route.ts
+@@ -1,6 +1,7 @@
+ import { NextRequest, NextResponse } from 'next/server';
+ import { generateVertexText } from '@/services/vertex-video';
+ import { resolveOutputPath } from '@/lib/video-output';
++import { VEO_HARDCODED_INJECTIONS } from '@/lib/veo-injections';
+ import fs from 'fs/promises';
+ 
+ export const maxDuration = 300;
+@@ -35,14 +36,10 @@ export async function POST(req: NextRequest) {
+       existingCount ?? 0
+     );
+ 
+-    const PACING_INSTRUCTION =
+-      'Speak at a natural conversational pace of approximately 2.5 to 3 words per second. No pauses between words.';
+-    const HARD_STOP_INSTRUCTION =
+-      'Stop all dialogue, mouth movement, and speech immediately when the scripted lines are finished. Hold a neutral expression after speaking.';
+     const NEGATIVE_PROMPT =
+       'slow speech, long pauses, continued talking after dialogue ends, extra lip movement, mumbling';
+ 
+-    const enhancedPrompt = `${prompt}\n\nInstructions:\n- ${PACING_INSTRUCTION}\n- ${HARD_STOP_INSTRUCTION}`;
++    const enhancedPrompt = `${prompt}\n\n${VEO_HARDCODED_INJECTIONS}`;
+ 
+     const res = await generateVertexText({
+       prompt: enhancedPrompt,
+diff --git a/src/app/sandbox/page.tsx b/src/app/sandbox/page.tsx
+index 5771c13..9c413ad 100644
+--- a/src/app/sandbox/page.tsx
++++ b/src/app/sandbox/page.tsx
+@@ -45,6 +45,8 @@ export type StepSlot = {
+   cumulativeDuration?: number;
+   completedAt?: number;
+   videoReferenceUrl?: string;
++  videoUrlHistory?: string[];
++  activeHistoryIndex?: number;
+ };
+ 
+ type RunRecord = {
+@@ -62,6 +64,8 @@ type RunRecord = {
+   scripts: { id: number; text: string }[];
+   steps: StepSlot[];
+   defaultPrompt?: string;
++  isExtendEnabled?: boolean;
++  stitchedVideoUrl?: string;
+ };
+ 
+ function timeAgo(ms: number): string {
+@@ -99,6 +103,7 @@ export default function SandboxPage() {
+   const [videoQuality, setVideoQuality] = useState<'720p' | '1080p' | '4k'>(
+     '1080p'
+   );
++  const [isExtendEnabled, setIsExtendEnabled] = useState<boolean>(false);
+ 
+   // Script Generation State
+   const [goalText, setGoalText] = useState<string>('');
+@@ -109,6 +114,9 @@ export default function SandboxPage() {
+   const [filmDirectionSystem, setFilmDirectionSystem] = useState<string | null>(
+     null
+   );
++  const [filmDirectionSections, setFilmDirectionSections] = useState<any[] | null>(
++    null
++  );
+   const [isAiGeneratedPrompt, setIsAiGeneratedPrompt] =
+     useState<boolean>(false);
+   const [isRegeneratingPrompt, setIsRegeneratingPrompt] =
+@@ -132,13 +140,16 @@ export default function SandboxPage() {
+ 
+   // Fetch Film Direction System on mount
+   useEffect(() => {
+-    getDoc(doc(db, 'intelligence', 'filmDirectionSystem'))
+-      .then((snap) => {
+-        setFilmDirectionSystem(
+-          snap.exists() ? (snap.data()?.filmDirectionSystem ?? null) : null
+-        );
++    fetch('/api/intelligence/film-direction')
++      .then((res) => res.json())
++      .then((data) => {
++        setFilmDirectionSystem(data.commonRules || null);
++        setFilmDirectionSections(data.styles || null);
+       })
+-      .catch(() => setFilmDirectionSystem(null));
++      .catch(() => {
++        setFilmDirectionSystem(null);
++        setFilmDirectionSections(null);
++      });
+   }, []);
+ 
+   // Load the default prompt from localStorage on mount
+@@ -192,6 +203,9 @@ export default function SandboxPage() {
+               if (data.config.videoCount) {
+                 setTargetDuration(8 + (data.config.videoCount - 1) * 7);
+               }
++              if (data.config.isExtendEnabled !== undefined) {
++                setIsExtendEnabled(data.config.isExtendEnabled);
++              }
+             }
+             if (data.goal) setGoalText(data.goal);
+             if (data.defaultVideoPrompt)
+@@ -234,6 +248,8 @@ export default function SandboxPage() {
+             scripts: data.scripts ?? [],
+             steps: data.steps ?? [],
+             defaultPrompt: data.defaultPrompt ?? '',
++            isExtendEnabled: data.isExtendEnabled ?? true,
++            stitchedVideoUrl: data.stitchedVideoUrl,
+           } as RunRecord;
+         });
+       setRuns(runDocs);
+@@ -357,6 +373,7 @@ export default function SandboxPage() {
+       model: string;
+       videoQuality: string;
+       serviceProvider: string;
++      isExtendEnabled: boolean;
+     }>
+   ) => {
+     if (!sandboxId) return;
+@@ -511,12 +528,14 @@ export default function SandboxPage() {
+   const runStep = async (
+     stepNumber: number,
+     runId: string,
+-    currentSteps: StepSlot[]
++    currentSteps: StepSlot[],
++    useExtendAPI: boolean
+   ) => {
+     if (!sandboxId || !avatarImage) return currentSteps;
+ 
+     const providerStr = providerConfig.activeProvider;
+-    const isStep1 = stepNumber === 1;
++    // We treat it as an initial generation if it's step 1 OR if extend is disabled
++    const isInitialGeneration = stepNumber === 1 || !useExtendAPI;
+ 
+     // Update local state and firestore to generating
+     const generatingSteps = currentSteps.map((s) => {
+@@ -545,7 +564,7 @@ export default function SandboxPage() {
+       let finalBlobUrl = '';
+       let stepRefUrl = undefined;
+ 
+-      if (isStep1) {
++      if (isInitialGeneration) {
+         const imgData = await getImageBase64();
+         const endpoint =
+           providerStr === 'vertex'
+@@ -645,18 +664,24 @@ export default function SandboxPage() {
+       }
+ 
+       const dur = 8 + (stepNumber - 1) * 7;
+-      const doneSteps = generatingSteps.map((s) =>
+-        s.stepNumber === stepNumber
+-          ? {
+-              ...s,
+-              status: 'done' as const,
+-              videoUrl: finalBlobUrl,
+-              videoReferenceUrl: stepRefUrl,
+-              completedAt: Date.now(),
+-              cumulativeDuration: dur,
+-            }
+-          : s
+-      );
++      const doneSteps = generatingSteps.map((s) => {
++        if (s.stepNumber === stepNumber) {
++          const newHistory = s.videoUrlHistory
++            ? [...s.videoUrlHistory, finalBlobUrl]
++            : [s.videoUrl && s.videoUrl !== finalBlobUrl ? s.videoUrl : null, finalBlobUrl].filter(Boolean) as string[];
++          return {
++            ...s,
++            status: 'done' as const,
++            videoUrl: finalBlobUrl,
++            videoReferenceUrl: stepRefUrl,
++            completedAt: Date.now(),
++            cumulativeDuration: dur,
++            videoUrlHistory: newHistory,
++            activeHistoryIndex: newHistory.length - 1,
++          };
++        }
++        return s;
++      });
+ 
+       setSteps(doneSteps);
+ 
+@@ -749,13 +774,14 @@ export default function SandboxPage() {
+         scripts: generatedScript ?? [],
+         steps: initialSteps,
+         defaultPrompt: defaultVideoPrompt,
++        isExtendEnabled,
+         createdAt: serverTimestamp(),
+         updatedAt: serverTimestamp(),
+       });
+ 
+       let currentStepsState = initialSteps;
+       for (let i = 1; i <= numberOfVideos; i++) {
+-        currentStepsState = await runStep(i, runId, currentStepsState);
++        currentStepsState = await runStep(i, runId, currentStepsState, isExtendEnabled);
+         const justFinished = currentStepsState.find((s) => s.stepNumber === i);
+         if (justFinished?.status === 'error') {
+           setIsCreatingVideos(false);
+@@ -763,9 +789,39 @@ export default function SandboxPage() {
+         }
+       }
+ 
++      // If extend is disabled, we need to stitch the clips together
++      let stitchedVideoUrl: string | undefined = undefined;
++      if (!isExtendEnabled && numberOfVideos > 1) {
++        try {
++          const videoUrls = currentStepsState
++            .map((s) => s.videoUrl)
++            .filter((url): url is string => !!url);
++            
++          if (videoUrls.length === numberOfVideos) {
++            const stitchRes = await fetch('/api/sandbox/stitch', {
++              method: 'POST',
++              headers: { 'Content-Type': 'application/json' },
++              body: JSON.stringify({ videoUrls }),
++            });
++            if (stitchRes.ok) {
++              const stitchData = await stitchRes.json();
++              stitchedVideoUrl = stitchData.videoUrl;
++            } else {
++              console.error('Failed to stitch videos', await stitchRes.text());
++            }
++          }
++        } catch (e) {
++          console.error('Error during stitching:', e);
++        }
++      }
++
+       await setDoc(
+         runDocRef,
+-        { status: 'done', updatedAt: serverTimestamp() },
++        { 
++          status: 'done', 
++          updatedAt: serverTimestamp(),
++          ...(stitchedVideoUrl ? { stitchedVideoUrl } : {})
++        },
+         { merge: true }
+       );
+       await setDoc(
+@@ -783,7 +839,7 @@ export default function SandboxPage() {
+   };
+ 
+   const handleRetryStep = async (stepNumber: number) => {
+-    if (!currentRunId) return;
++    if (!currentRunId || !sandboxId) return;
+     setIsCreatingVideos(true);
+     let currentStepsState = steps;
+ 
+@@ -793,18 +849,141 @@ export default function SandboxPage() {
+         ? generatedScript.length
+         : clipCount;
+ 
+-    for (let i = stepNumber; i <= numberOfVideos; i++) {
+-      currentStepsState = await runStep(i, currentRunId, currentStepsState);
+-      const justFinished = currentStepsState.find((s) => s.stepNumber === i);
+-      if (justFinished?.status === 'error') {
+-        setIsCreatingVideos(false);
+-        return; // Stop the chain
++    // Get current run to check if extend is enabled
++    let useExtendAPI = true;
++    const runDoc = await getDoc(
++      doc(collection(db, 'sandbox', sandboxId, 'generatedVideos'), currentRunId)
++    );
++    const runData = runDoc.data();
++    useExtendAPI = runData?.isExtendEnabled ?? true;
++
++    if (!useExtendAPI) {
++      // Regenerate just this step
++      currentStepsState = await runStep(stepNumber, currentRunId, currentStepsState, false);
++      const justFinished = currentStepsState.find((s) => s.stepNumber === stepNumber);
++      
++      if (justFinished?.status !== 'error') {
++        // Restitch videos
++        try {
++          const videoUrls = currentStepsState
++            .map((s) => s.videoUrl)
++            .filter((url): url is string => !!url);
++            
++          if (videoUrls.length === numberOfVideos) {
++            const stitchRes = await fetch('/api/sandbox/stitch', {
++              method: 'POST',
++              headers: { 'Content-Type': 'application/json' },
++              body: JSON.stringify({ videoUrls }),
++            });
++            if (stitchRes.ok) {
++              const stitchData = await stitchRes.json();
++              await setDoc(
++                doc(collection(db, 'sandbox', sandboxId, 'generatedVideos'), currentRunId),
++                { stitchedVideoUrl: stitchData.videoUrl },
++                { merge: true }
++              );
++            }
++          }
++        } catch (e) {
++          console.error('Error during stitching:', e);
++        }
++      }
++    } else {
++      // Chain regenerate
++      for (let i = stepNumber; i <= numberOfVideos; i++) {
++        currentStepsState = await runStep(i, currentRunId, currentStepsState, useExtendAPI);
++        const justFinished = currentStepsState.find((s) => s.stepNumber === i);
++        if (justFinished?.status === 'error') {
++          break;
++        }
+       }
+     }
+ 
+     setIsCreatingVideos(false);
+   };
+ 
++  const handleChangeStepVersion = async (stepNumber: number, runId: string, newIndex: number) => {
++    if (!sandboxId) return;
++    
++    // Update local state if it's the current run
++    let targetSteps = steps;
++    if (runId === currentRunId) {
++      targetSteps = steps.map(s => {
++        if (s.stepNumber === stepNumber && s.videoUrlHistory) {
++          return {
++            ...s,
++            videoUrl: s.videoUrlHistory[newIndex],
++            activeHistoryIndex: newIndex,
++          };
++        }
++        return s;
++      });
++      setSteps(targetSteps);
++    }
++
++    // Update run history state if it's a past run
++    setRuns(prev => prev.map(r => {
++      if (r.id === runId) {
++        return {
++          ...r,
++          steps: r.steps.map(s => {
++            if (s.stepNumber === stepNumber && s.videoUrlHistory) {
++              return {
++                ...s,
++                videoUrl: s.videoUrlHistory[newIndex],
++                activeHistoryIndex: newIndex,
++              };
++            }
++            return s;
++          })
++        };
++      }
++      return r;
++    }));
++
++    // Find the run steps to stitch
++    const targetRun = runId === currentRunId ? { steps: targetSteps } : runs.find(r => r.id === runId);
++    if (!targetRun) return;
++
++    // Restitch with new configuration
++    try {
++      const videoUrls = targetRun.steps
++        .map((s) => s.videoUrl)
++        .filter((url): url is string => !!url);
++        
++      let stitchedVideoUrl = undefined;
++      // Only stitch if we have all parts (or multiple parts)
++      if (videoUrls.length > 1) {
++        const stitchRes = await fetch('/api/sandbox/stitch', {
++          method: 'POST',
++          headers: { 'Content-Type': 'application/json' },
++          body: JSON.stringify({ videoUrls }),
++        });
++        if (stitchRes.ok) {
++          const stitchData = await stitchRes.json();
++          stitchedVideoUrl = stitchData.videoUrl;
++        }
++      }
++
++      // Update DB with the new steps selection and new stitch
++      await setDoc(
++        doc(collection(db, 'sandbox', sandboxId, 'generatedVideos'), runId),
++        {
++          steps: targetRun.steps,
++          ...(stitchedVideoUrl ? { stitchedVideoUrl } : {})
++        },
++        { merge: true }
++      );
++      
++      // Refresh local runs if it's not the current run
++      if (runId !== currentRunId) {
++        setRuns(prev => prev.map(r => r.id === runId ? { ...r, stitchedVideoUrl } : r));
++      }
++    } catch (e) {
++      console.error('Error restitching history version change', e);
++    }
++  };
++
+   const handleRegeneratePrompt = async () => {
+     if (!filmDirectionSystem || !avatarImage) return;
+     setIsRegeneratingPrompt(true);
+@@ -812,16 +991,25 @@ export default function SandboxPage() {
+     try {
+       const imgData = await getImageBase64();
+       const existingDialogues = generatedScript?.map((s) => s.text) || [];
++      const selectionContext = {
++        goalText: goalText.trim(),
++        aspectRatio,
++        hasHumanSubject: !!avatarImage,
++        isUGC: true,
++      };
++
+       const response = await fetch('/api/sandbox/generate-scripts', {
+         method: 'POST',
+         headers: { 'Content-Type': 'application/json' },
+         body: JSON.stringify({
+           goalText: goalText.trim(),
+           clipCount,
+-          filmDirectionSystem,
++          commonRules: filmDirectionSystem,
+           avatarImageBase64: imgData.base64,
+           promptOnlyMode: true,
+           existingDialogues,
++          styles: filmDirectionSections,
++          selectionContext,
+         }),
+       });
+ 
+@@ -874,8 +1062,15 @@ export default function SandboxPage() {
+       };
+ 
+       if (filmDirectionSystem && avatarBase64) {
+-        payload.filmDirectionSystem = filmDirectionSystem;
++        payload.commonRules = filmDirectionSystem;
+         payload.avatarImageBase64 = avatarBase64;
++        payload.styles = filmDirectionSections;
++        payload.selectionContext = {
++          goalText: goalText.trim(),
++          aspectRatio,
++          hasHumanSubject: !!avatarImage,
++          isUGC: true,
++        };
+       }
+ 
+       const response = await fetch('/api/sandbox/generate-scripts', {
+@@ -1280,6 +1475,47 @@ export default function SandboxPage() {
+                     </div>
+                   </div>
+ 
++                  <div className="space-y-2">
++                    <Label className="text-sm font-medium text-slate-700">
++                      Extend Video
++                    </Label>
++                    <div className="flex gap-2">
++                      <button
++                        onClick={() => {
++                          setIsExtendEnabled(true);
++                          updateConfigInDb({ isExtendEnabled: true });
++                        }}
++                        className={cn(
++                          'flex-1 py-2 px-3 rounded-lg border text-sm font-medium transition-colors',
++                          isExtendEnabled
++                            ? 'bg-violet-50 border-violet-200 text-violet-700'
++                            : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
++                        )}
++                      >
++                        Yes
++                      </button>
++                      <button
++                        onClick={() => {
++                          setIsExtendEnabled(false);
++                          updateConfigInDb({ isExtendEnabled: false });
++                        }}
++                        className={cn(
++                          'flex-1 py-2 px-3 rounded-lg border text-sm font-medium transition-colors',
++                          !isExtendEnabled
++                            ? 'bg-violet-50 border-violet-200 text-violet-700'
++                            : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
++                        )}
++                      >
++                        No
++                      </button>
++                    </div>
++                    <p className="text-xs text-slate-500 mt-1">
++                      {isExtendEnabled
++                        ? 'Uses extend APIs to natively generate longer videos.'
++                        : 'Generates independent clips and stitches them using ffmpeg.'}
++                    </p>
++                  </div>
++
+                   <div className="space-y-4">
+                     <Label className="text-sm font-medium text-slate-700">
+                       Model & Provider
+@@ -1439,21 +1675,32 @@ export default function SandboxPage() {
+                 const isAllDone =
+                   steps.length > 0 && steps.every((s) => s.status === 'done');
+                 if (!isAllDone) return null;
+-                const lastDoneStep = steps[steps.length - 1];
+-                if (!lastDoneStep?.videoUrl) return null;
++
++                let finalVideoUrl = '';
++                const activeRun = runs.find((r) => r.id === currentRunId);
++                
++                if (activeRun && activeRun.isExtendEnabled === false) {
++                  finalVideoUrl = activeRun.stitchedVideoUrl || '';
++                } else {
++                  const lastDoneStep = steps[steps.length - 1];
++                  finalVideoUrl = lastDoneStep?.videoUrl || '';
++                }
++
++                if (!finalVideoUrl) return null;
++
+                 return (
+                   <div className="mb-6 bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden p-4">
+                     <h3 className="font-semibold text-slate-800 mb-3">
+                       Final Complete Video
+                     </h3>
+                     <video
+-                      src={lastDoneStep.videoUrl}
++                      src={finalVideoUrl}
+                       controls
+                       className="w-full rounded-lg aspect-video object-contain bg-black"
+                     />
+                     <div className="mt-4 flex justify-end">
+                       <a
+-                        href={lastDoneStep.videoUrl}
++                        href={finalVideoUrl}
+                         download
+                         className="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors h-9 px-4 gap-2 text-white bg-violet-600 hover:bg-violet-700 shadow-sm"
+                       >
+@@ -1492,7 +1739,8 @@ export default function SandboxPage() {
+                           <div className="flex items-center gap-2">
+                             <h3 className="font-medium text-slate-800">
+                               {idx === steps.length - 1 &&
+-                              step.status === 'done'
++                              step.status === 'done' &&
++                              isExtendEnabled
+                                 ? 'Final Video'
+                                 : `Step ${step.stepNumber}`}
+                             </h3>
+@@ -1502,32 +1750,71 @@ export default function SandboxPage() {
+                               </span>
+                             )}
+                           </div>
+-                          <div className="flex items-center gap-2">
+-                            {step.status === 'generating' && (
+-                              <span className="text-xs font-medium text-amber-600 bg-amber-50 px-2 py-1 rounded-full flex items-center gap-1">
+-                                <div className="w-3 h-3 border-2 border-amber-500 border-t-transparent rounded-full animate-spin" />
+-                                Generating
+-                              </span>
+-                            )}
+-                            {step.status === 'done' && step.videoUrl && (
+-                              <span className="text-xs font-medium text-emerald-600 bg-emerald-50 px-2 py-1 rounded-full">
+-                                Completed
+-                              </span>
+-                            )}
+-                            {step.status === 'done' && !step.videoUrl && (
+-                              <span className="text-xs font-medium text-amber-600 bg-amber-50 px-2 py-1 rounded-full">
+-                                No Data
+-                              </span>
+-                            )}
+-                            {step.status === 'error' && (
+-                              <span className="text-xs font-medium text-red-600 bg-red-50 px-2 py-1 rounded-full">
+-                                Error
+-                              </span>
+-                            )}
+-                            {step.status === 'idle' && (
+-                              <span className="text-xs font-medium text-slate-500 bg-slate-100 px-2 py-1 rounded-full">
+-                                Waiting
+-                              </span>
++                          <div className="flex flex-col items-end gap-2">
++                            <div className="flex items-center gap-2">
++                              {step.status === 'generating' && (
++                                <span className="text-xs font-medium text-amber-600 bg-amber-50 px-2 py-1 rounded-full flex items-center gap-1">
++                                  <div className="w-3 h-3 border-2 border-amber-500 border-t-transparent rounded-full animate-spin" />
++                                  Generating
++                                </span>
++                              )}
++                              {step.status === 'done' && step.videoUrl && (
++                                <span className="text-xs font-medium text-emerald-600 bg-emerald-50 px-2 py-1 rounded-full">
++                                  Completed
++                                </span>
++                              )}
++                              {step.status === 'done' && !step.videoUrl && (
++                                <span className="text-xs font-medium text-amber-600 bg-amber-50 px-2 py-1 rounded-full">
++                                  No Data
++                                </span>
++                              )}
++                              {step.status === 'error' && (
++                                <span className="text-xs font-medium text-red-600 bg-red-50 px-2 py-1 rounded-full">
++                                  Error
++                                </span>
++                              )}
++                              {step.status === 'idle' && (
++                                <span className="text-xs font-medium text-slate-500 bg-slate-100 px-2 py-1 rounded-full">
++                                  Waiting
++                                </span>
++                              )}
++                            </div>
++                            
++                            {step.status === 'done' && !isExtendEnabled && step.videoUrlHistory && step.videoUrlHistory.length > 0 && (
++                              <div className="flex items-center gap-2 bg-slate-100 rounded-md p-1 mt-1">
++                                <Button
++                                  variant="ghost"
++                                  size="sm"
++                                  className="h-6 w-6 p-0"
++                                  disabled={step.activeHistoryIndex === 0}
++                                  onClick={() => handleChangeStepVersion(step.stepNumber, currentRunId!, (step.activeHistoryIndex || 0) - 1)}
++                                >
++                                  <ChevronDown className="w-4 h-4 rotate-90" />
++                                </Button>
++                                <span className="text-xs font-medium text-slate-600 min-w-[50px] text-center">
++                                  {((step.activeHistoryIndex || 0) + 1)} of {step.videoUrlHistory.length}
++                                </span>
++                                <Button
++                                  variant="ghost"
++                                  size="sm"
++                                  className="h-6 w-6 p-0"
++                                  disabled={step.activeHistoryIndex === step.videoUrlHistory.length - 1}
++                                  onClick={() => handleChangeStepVersion(step.stepNumber, currentRunId!, (step.activeHistoryIndex || 0) + 1)}
++                                >
++                                  <ChevronDown className="w-4 h-4 -rotate-90" />
++                                </Button>
++                                <div className="w-px h-4 bg-slate-200 mx-1" />
++                                <Button
++                                  variant="ghost"
++                                  size="sm"
++                                  className="h-6 px-2 text-xs font-medium text-violet-600 hover:text-violet-700 gap-1"
++                                  disabled={isCreatingVideos}
++                                  onClick={() => handleRetryStep(step.stepNumber)}
++                                >
++                                  <RotateCcw className="w-3 h-3" />
++                                  Regenerate
++                                </Button>
++                              </div>
+                             )}
+                           </div>
+                         </div>
+@@ -1564,8 +1851,8 @@ export default function SandboxPage() {
+                                 </a>
+                               </div>
+                             )}
+-                            {idx === steps.length - 1 && (
+-                              <div className="mt-3 flex justify-end">
++                            {(idx === steps.length - 1 && isExtendEnabled) && (
++                              <div className="mt-3 flex items-center justify-end">
+                                 <a
+                                   href={step.videoUrl}
+                                   download
+@@ -1679,41 +1966,73 @@ export default function SandboxPage() {
+                                         run.steps.every(
+                                           (s) => s.status === 'done'
+                                         );
+-                                      if (!isAllDone) return null;
+-                                      const lastDoneStep =
+-                                        run.steps[run.steps.length - 1];
+-                                      if (!lastDoneStep?.videoUrl) return null;
+-                                      return (
+-                                        <div className="mb-4">
+-                                          <div className="text-sm font-semibold text-slate-800 mb-2">
+-                                            Final Complete Video
+-                                          </div>
+-                                          <video
+-                                            src={lastDoneStep.videoUrl}
+-                                            controls
+-                                            className="w-full rounded-lg aspect-video object-cover bg-black"
+-                                          />
+-                                          <div className="mt-2 flex justify-end">
+-                                            <a
+-                                              href={lastDoneStep.videoUrl}
+-                                              download
+-                                              className="inline-flex items-center justify-center rounded-md text-xs font-medium transition-colors h-7 px-3 gap-1.5 text-white bg-violet-600 hover:bg-violet-700 shadow-sm"
+-                                            >
+-                                              <Download className="w-3 h-3" />{' '}
+-                                              Download
+-                                            </a>
++                                        if (!isAllDone) return null;
++                                        let finalVideoUrl = '';
++                                        if (run.isExtendEnabled === false) {
++                                          finalVideoUrl = run.stitchedVideoUrl || '';
++                                        } else {
++                                          const lastDoneStep = run.steps[run.steps.length - 1];
++                                          finalVideoUrl = lastDoneStep?.videoUrl || '';
++                                        }
++                                        if (!finalVideoUrl) return null;
++                                        return (
++                                          <div className="mb-4">
++                                            <div className="text-sm font-semibold text-slate-800 mb-2">
++                                              Final Complete Video
++                                            </div>
++                                            <video
++                                              src={finalVideoUrl}
++                                              controls
++                                              className="w-full rounded-lg aspect-video object-cover bg-black"
++                                            />
++                                            <div className="mt-2 flex justify-end">
++                                              <a
++                                                href={finalVideoUrl}
++                                                download
++                                                className="inline-flex items-center justify-center rounded-md text-xs font-medium transition-colors h-7 px-3 gap-1.5 text-white bg-violet-600 hover:bg-violet-700 shadow-sm"
++                                              >
++                                                <Download className="w-3 h-3" />{' '}
++                                                Download
++                                              </a>
++                                            </div>
+                                           </div>
+-                                        </div>
+-                                      );
++                                        );
+                                     })()}
+                                     {[...run.steps]
+                                       .sort(
+                                         (a, b) => a.stepNumber - b.stepNumber
+                                       )
+                                       .map((step) => (
+-                                        <div key={step.stepNumber}>
+-                                          <div className="text-xs font-medium text-slate-600 mb-1.5">
+-                                            Step {step.stepNumber}
++                                        <div key={step.stepNumber} className="relative">
++                                          <div className="flex justify-between items-center mb-1.5">
++                                            <div className="text-xs font-medium text-slate-600">
++                                              Step {step.stepNumber}
++                                            </div>
++                                            {!run.isExtendEnabled && step.videoUrlHistory && step.videoUrlHistory.length > 0 && (
++                                              <div className="flex items-center gap-1 bg-slate-100 rounded p-0.5">
++                                                <Button
++                                                  variant="ghost"
++                                                  size="sm"
++                                                  className="h-5 w-5 p-0"
++                                                  disabled={step.activeHistoryIndex === 0}
++                                                  onClick={() => handleChangeStepVersion(step.stepNumber, run.id, (step.activeHistoryIndex || 0) - 1)}
++                                                >
++                                                  <ChevronDown className="w-3 h-3 rotate-90" />
++                                                </Button>
++                                                <span className="text-[10px] font-medium text-slate-500 min-w-[30px] text-center">
++                                                  {((step.activeHistoryIndex || 0) + 1)} / {step.videoUrlHistory.length}
++                                                </span>
++                                                <Button
++                                                  variant="ghost"
++                                                  size="sm"
++                                                  className="h-5 w-5 p-0"
++                                                  disabled={step.activeHistoryIndex === step.videoUrlHistory.length - 1}
++                                                  onClick={() => handleChangeStepVersion(step.stepNumber, run.id, (step.activeHistoryIndex || 0) + 1)}
++                                                >
++                                                  <ChevronDown className="w-3 h-3 -rotate-90" />
++                                                </Button>
++                                              </div>
++                                            )}
+                                           </div>
+                                           {step.videoUrl && (
+                                             <video

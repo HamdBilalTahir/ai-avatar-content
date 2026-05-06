@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { generateReelImageRefs } from '@/services/gemini-video';
 import { resolveOutputPath } from '@/lib/video-output';
 import { processSandboxCompletion } from '@/lib/sandbox-updater';
+import { VEO_HARDCODED_INJECTIONS } from '@/lib/veo-injections';
 import fs from 'fs/promises';
 
 export async function POST(req: NextRequest) {
@@ -48,14 +49,10 @@ export async function POST(req: NextRequest) {
       mimeType: img.mimeType || img.mime_type || 'image/jpeg',
     }));
 
-    const PACING_INSTRUCTION =
-      'Speak at a natural conversational pace of approximately 2.5 to 3 words per second. No pauses between words.';
-    const HARD_STOP_INSTRUCTION =
-      'Stop all dialogue, mouth movement, and speech immediately when the scripted lines are finished. Hold a neutral expression after speaking.';
     const NEGATIVE_PROMPT =
       'slow speech, long pauses, continued talking after dialogue ends, extra lip movement, mumbling';
 
-    const enhancedPrompt = `${finalPrompt}\n\nInstructions:\n- ${PACING_INSTRUCTION}\n- ${HARD_STOP_INSTRUCTION}`;
+    const enhancedPrompt = `${finalPrompt}\n\n${VEO_HARDCODED_INJECTIONS}`;
 
     const res = await generateReelImageRefs({
       prompt: enhancedPrompt,

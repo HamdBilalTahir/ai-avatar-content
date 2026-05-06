@@ -1,3 +1,136 @@
+## 🗓️ **2026-05-05**
+
+---
+
+### ✨ Features
+
+---
+
+> ### Improved Sandbox UI Loading State & Blob Naming
+>
+> - **What changed:** Upgraded the loading UI within sandbox video cards from a static image icon to a properly styled spinning loader with "Generating video..." text. Additionally, modified `sandbox-updater.ts` so that uploads to Vercel Blob accurately read the `videoVersions` array length to generate unique `_1`, `_2`, etc. filename extensions on regeneration.
+> - **Why:** Improves user feedback during potentially long generation wait times and explicitly prevents Vercel Blob from overwriting previous generation versions by ensuring each attempt gets a uniquely suffixed URL.
+> - **Files:**
+>   - `src/app/sandbox/page.tsx`
+>   - `src/lib/sandbox-updater.ts`
+
+---
+
+> ### Vercel Blob Collision Fix in Sandbox Updater
+>
+> - **What changed:** Re-enabled `addRandomSuffix: true` on the `@vercel/blob` `put()` calls in `src/lib/sandbox-updater.ts` when uploading generated sandbox videos and reference JSONs.
+> - **Why:** Prevents "blob already exists" errors. Even though version increments are properly tracked locally, network retries or simultaneous background updates could result in the same filename being requested again. Vercel Blob requires either overwrite permission or random suffixes to safely store duplicated pushes.
+> - **Files:**
+>   - `src/lib/sandbox-updater.ts`
+
+---
+
+> ### Track versions of regenerated sandbox steps
+>
+> - **What changed:** Replaced `videoUrlHistory: string[]` with `videoVersions: { version: string, url: string }[]` for Sandbox clips. Upon generation, a version label (e.g. `_1`, `_2`) is attached to the URL and stored in DB. Modified the UI to show arrows switching between tracked versions directly on the clip card, updating the current clip and restitching automatically.
+> - **Why:** Makes iteration on sandbox clips clearer by tracking explicit versions rather than a blind history array, making it easier to select between various attempts.
+> - **Files:**
+>   - `src/app/sandbox/page.tsx`
+>   - `src/lib/types.ts`
+
+---
+
+> ### Single-Clip Regeneration History & Auto-Stitching
+>
+> - **What changed:** Sandbox steps now maintain a `videoUrlHistory` array and an `activeHistoryIndex`. When 'Extend Video' is 'No', regenerating a clip appends the new version without deleting previous ones. The UI features left/right arrows to cycle through past generations for each step, and changing the active version automatically triggers the backend `/api/sandbox/stitch` endpoint to re-compile the final video.
+> - **Why:** Allows users to experiment with single clip iterations (prompt tweaks or random seeds) and securely compare/restore past versions while keeping the final stitched video continuously synced with their current selections.
+> - **Files:**
+>   - `src/app/sandbox/page.tsx`
+
+---
+
+> ### Add Extend Video Toggle and FFmpeg Stitching API
+>
+> - **What changed:** Added a toggle in the Sandbox to disable extend video APIs and use `image-ref` generation with `ffmpeg` stitching instead.
+> - **Why:** Allows users to choose between native video extension or independent clip generation combined via server-side ffmpeg concat.
+> - **Files:**
+>   - `src/app/sandbox/page.tsx`
+>   - `src/app/api/sandbox/stitch/route.ts`
+
+---
+
+> ### Dynamic Film Direction System Subcollection
+>
+> - **What changed:** Updated film direction system to dynamically fetch `commonRules` and `styles` from Firestore subcollections. `api/sandbox/generate-scripts` now uses `gemini-2.5-flash` to select a single style key based on the image, dialogues, and goal, then dynamically injects explicitly labelled `Common Rules:` and `Selected Style:` into the final prompt.
+> - **Why:** Simplifies the LLM prompt by removing the monolithic document context and ensures the final video generation LLM receives highly targeted style instructions specific to the selected genre without confusion.
+> - **Files:**
+>   - `src/app/api/intelligence/film-direction/route.ts`
+>   - `src/app/api/sandbox/generate-scripts/route.ts`
+>   - `src/app/sandbox/page.tsx`
+>   - `test-selection.ts`
+
+---
+
+### 🐛 Fixes
+
+---
+
+> ### Fix missing sandbox topicName initialization
+>
+> - **What changed:** Updated `fetchSandboxData` in `src/app/sandbox/page.tsx` to strictly check `data.topicName !== undefined` instead of relying on truthiness `if (data.topicName)`.
+> - **Why:** When users left the `topicName` empty, it would evaluate as falsey and not properly sync state, causing the topic name field in the UI not to pull the stored state correctly.
+> - **Files:**
+>   - `src/app/sandbox/page.tsx`
+
+---
+
+> ### Fix clip version switching not properly updating stitched video
+>
+> - **What changed:** Updated `handleChangeStepVersion` in `src/app/sandbox/page.tsx` to correctly capture and pass the updated clip versions when generating a new stitched video.
+> - **Why:** The previous logic mistakenly sent the old, un-updated array of clips to the stitch API because of a delayed React state closure, causing the new stitched video to wrongly contain old clip versions. The stitched video also now maintains its exact blob path, with cache busting natively handled.
+> - **Files:**
+>   - `src/app/sandbox/page.tsx`
+
+---
+
+> ### Sandbox Video Dimensions Fixed to Object-Contain
+>
+> - **What changed:** Updated the video player components in the Sandbox page to use `object-contain` instead of `object-cover`.
+> - **Why:** Ensures the full video dimensions are always visible and letterboxed correctly rather than cropping the video edges to fill the card.
+> - **Files:**
+>   - `src/app/sandbox/page.tsx`
+
+---
+
+> ### Block Phones in UGC Selfie Veo Generation
+>
+> - **What changed:** Added an explicit `UGC Selfie Rule` to the hardcoded Veo injections list that prevents the model from generating visible phones in UGC selfie style videos.
+> - **Why:** Veo often forces a phone into the frame when generating selfie content, breaking the desired illusion. This hardcoded negative prompt stops it.
+> - **Files:**
+>   - `src/lib/veo-injections.ts`
+
+---
+
+> ### Fix History Buttons Visibility & Filename Increment Logic
+>
+> - **What changed:** Removed UI restrictions hiding the "Regenerate" and left/right history iteration buttons when the "Extend" toggle was enabled. Updated `processSandboxCompletion` in `sandbox-updater.ts` to fetch step history from Firestore before uploading so the files use sequential suffixes (`_1`, `_2`) instead of timestamps.
+> - **Why:** Allows users to easily iterate and navigate previous clips regardless of extend video settings, and keeps the storage bucket organized with human-readable increment suffixes.
+> - **Files:**
+>   - `src/app/sandbox/page.tsx`
+>   - `src/lib/sandbox-updater.ts`
+
+---
+
+> ### Relocate Veo Constraints to Sandbox Prompt Output
+>
+> - **What changed:** Removed Veo-specific pacing and transition/lighting instructions from the backend video generation API routes (`generate-video` and `extend-video`). These instructions are now explicitly appended to the LLM's output in the `sandbox/generate-scripts` route instead.
+> - **Why:** Moves hardcoded AI constraints out of the infrastructure level and into the visible prompt payload. This ensures that the exact instructions sent to the Veo model are fully transparent and generated correctly upstream during the script creation phase.
+> - **Files:**
+>   - `src/app/api/sandbox/generate-scripts/route.ts`
+>   - `src/app/api/script/generate-video/text/route.ts`
+>   - `src/app/api/script/generate-video/image-refs/route.ts`
+>   - `src/app/api/script/generate-video/image-direct/route.ts`
+>   - `src/app/api/script/extend-video/gemini/route.ts`
+>   - `src/app/api/script/generate-video/vertex/text/route.ts`
+>   - `src/app/api/script/generate-video/vertex/image-refs/route.ts`
+
+---
+
 ## 🗓️ **2026-05-04**
 
 ---

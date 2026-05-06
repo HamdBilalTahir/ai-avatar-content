@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { generateVertexText } from '@/services/vertex-video';
 import { resolveOutputPath } from '@/lib/video-output';
+import { VEO_HARDCODED_INJECTIONS } from '@/lib/veo-injections';
 import fs from 'fs/promises';
 
 export const maxDuration = 300;
@@ -35,14 +36,10 @@ export async function POST(req: NextRequest) {
       existingCount ?? 0
     );
 
-    const PACING_INSTRUCTION =
-      'Speak at a natural conversational pace of approximately 2.5 to 3 words per second. No pauses between words.';
-    const HARD_STOP_INSTRUCTION =
-      'Stop all dialogue, mouth movement, and speech immediately when the scripted lines are finished. Hold a neutral expression after speaking.';
     const NEGATIVE_PROMPT =
       'slow speech, long pauses, continued talking after dialogue ends, extra lip movement, mumbling';
 
-    const enhancedPrompt = `${prompt}\n\nInstructions:\n- ${PACING_INSTRUCTION}\n- ${HARD_STOP_INSTRUCTION}`;
+    const enhancedPrompt = `${prompt}\n\n${VEO_HARDCODED_INJECTIONS}`;
 
     const res = await generateVertexText({
       prompt: enhancedPrompt,

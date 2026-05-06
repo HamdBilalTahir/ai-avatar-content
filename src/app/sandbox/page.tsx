@@ -45,6 +45,8 @@ export type StepSlot = {
   cumulativeDuration?: number;
   completedAt?: number;
   videoReferenceUrl?: string;
+  videoVersions?: { version: string; url: string }[];
+  activeVersionIndex?: number;
 };
 
 type RunRecord = {
@@ -62,6 +64,9 @@ type RunRecord = {
   scripts: { id: number; text: string }[];
   steps: StepSlot[];
   defaultPrompt?: string;
+  topicName?: string;
+  isExtendEnabled?: boolean;
+  stitchedVideoUrl?: string;
 };
 
 function timeAgo(ms: number): string {
@@ -99,9 +104,11 @@ export default function SandboxPage() {
   const [videoQuality, setVideoQuality] = useState<'720p' | '1080p' | '4k'>(
     '1080p'
   );
+  const [isExtendEnabled, setIsExtendEnabled] = useState<boolean>(false);
 
   // Script Generation State
   const [goalText, setGoalText] = useState<string>('');
+  const [topicName, setTopicName] = useState<string>('');
   const [generatedScript, setGeneratedScript] = useState<
     { id: number; text: string }[] | null
   >(null);
@@ -109,6 +116,9 @@ export default function SandboxPage() {
   const [filmDirectionSystem, setFilmDirectionSystem] = useState<string | null>(
     null
   );
+  const [filmDirectionSections, setFilmDirectionSections] = useState<
+    any[] | null
+  >(null);
   const [isAiGeneratedPrompt, setIsAiGeneratedPrompt] =
     useState<boolean>(false);
   const [isRegeneratingPrompt, setIsRegeneratingPrompt] =
@@ -132,13 +142,16 @@ export default function SandboxPage() {
 
   // Fetch Film Direction System on mount
   useEffect(() => {
-    getDoc(doc(db, 'intelligence', 'filmDirectionSystem'))
-      .then((snap) => {
-        setFilmDirectionSystem(
-          snap.exists() ? (snap.data()?.filmDirectionSystem ?? null) : null
-        );
+    fetch('/api/intelligence/film-direction')
+      .then((res) => res.json())
+      .then((data) => {
+        setFilmDirectionSystem(data.commonRules || null);
+        setFilmDirectionSections(data.styles || null);
       })
-      .catch(() => setFilmDirectionSystem(null));
+      .catch(() => {
+        setFilmDirectionSystem(null);
+        setFilmDirectionSections(null);
+      });
   }, []);
 
   // Load the default prompt from localStorage on mount
@@ -192,8 +205,12 @@ export default function SandboxPage() {
               if (data.config.videoCount) {
                 setTargetDuration(8 + (data.config.videoCount - 1) * 7);
               }
+              if (data.config.isExtendEnabled !== undefined) {
+                setIsExtendEnabled(data.config.isExtendEnabled);
+              }
             }
             if (data.goal) setGoalText(data.goal);
+            if (data.topicName) setTopicName(data.topicName);
             if (data.defaultVideoPrompt)
               setDefaultVideoPrompt(data.defaultVideoPrompt);
             if (data.scripts) setGeneratedScript(data.scripts);
@@ -234,6 +251,9 @@ export default function SandboxPage() {
             scripts: data.scripts ?? [],
             steps: data.steps ?? [],
             defaultPrompt: data.defaultPrompt ?? '',
+            topicName: data.topicName ?? '',
+            isExtendEnabled: data.isExtendEnabled ?? true,
+            stitchedVideoUrl: data.stitchedVideoUrl,
           } as RunRecord;
         });
       setRuns(runDocs);
@@ -357,6 +377,7 @@ export default function SandboxPage() {
       model: string;
       videoQuality: string;
       serviceProvider: string;
+      isExtendEnabled: boolean;
     }>
   ) => {
     if (!sandboxId) return;
@@ -389,6 +410,7 @@ export default function SandboxPage() {
       });
       setSandboxId(sId);
       setGoalText('');
+      setTopicName('');
       setGeneratedScript(null);
       setAvatarImage(null);
       setSteps([]);
@@ -511,12 +533,14 @@ export default function SandboxPage() {
   const runStep = async (
     stepNumber: number,
     runId: string,
-    currentSteps: StepSlot[]
+    currentSteps: StepSlot[],
+    useExtendAPI: boolean
   ) => {
     if (!sandboxId || !avatarImage) return currentSteps;
 
     const providerStr = providerConfig.activeProvider;
-    const isStep1 = stepNumber === 1;
+    // We treat it as an initial generation if it's step 1 OR if extend is disabled
+    const isInitialGeneration = stepNumber === 1 || !useExtendAPI;
 
     // Update local state and firestore to generating
     const generatingSteps = currentSteps.map((s) => {
@@ -545,7 +569,7 @@ export default function SandboxPage() {
       let finalBlobUrl = '';
       let stepRefUrl = undefined;
 
-      if (isStep1) {
+      if (isInitialGeneration) {
         const imgData = await getImageBase64();
         const endpoint =
           providerStr === 'vertex'
@@ -645,18 +669,38 @@ export default function SandboxPage() {
       }
 
       const dur = 8 + (stepNumber - 1) * 7;
-      const doneSteps = generatingSteps.map((s) =>
-        s.stepNumber === stepNumber
-          ? {
-              ...s,
-              status: 'done' as const,
-              videoUrl: finalBlobUrl,
-              videoReferenceUrl: stepRefUrl,
-              completedAt: Date.now(),
-              cumulativeDuration: dur,
-            }
-          : s
-      );
+      const doneSteps = generatingSteps.map((s) => {
+        if (s.stepNumber === stepNumber) {
+          let newVersions = s.videoVersions || [];
+
+          // Migrate old URL if it exists but no versions are tracked yet
+          if (
+            newVersions.length === 0 &&
+            s.videoUrl &&
+            s.videoUrl !== finalBlobUrl
+          ) {
+            newVersions = [{ version: '_1', url: s.videoUrl }];
+          }
+
+          const newVersionString = `_${newVersions.length + 1}`;
+          newVersions = [
+            ...newVersions,
+            { version: newVersionString, url: finalBlobUrl },
+          ];
+
+          return {
+            ...s,
+            status: 'done' as const,
+            videoUrl: finalBlobUrl,
+            videoReferenceUrl: stepRefUrl,
+            completedAt: Date.now(),
+            cumulativeDuration: dur,
+            videoVersions: newVersions,
+            activeVersionIndex: newVersions.length - 1,
+          };
+        }
+        return s;
+      });
 
       setSteps(doneSteps);
 
@@ -749,13 +793,20 @@ export default function SandboxPage() {
         scripts: generatedScript ?? [],
         steps: initialSteps,
         defaultPrompt: defaultVideoPrompt,
+        topicName,
+        isExtendEnabled,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
 
       let currentStepsState = initialSteps;
       for (let i = 1; i <= numberOfVideos; i++) {
-        currentStepsState = await runStep(i, runId, currentStepsState);
+        currentStepsState = await runStep(
+          i,
+          runId,
+          currentStepsState,
+          isExtendEnabled
+        );
         const justFinished = currentStepsState.find((s) => s.stepNumber === i);
         if (justFinished?.status === 'error') {
           setIsCreatingVideos(false);
@@ -763,9 +814,42 @@ export default function SandboxPage() {
         }
       }
 
+      // If extend is disabled, we need to stitch the clips together
+      let stitchedVideoUrl: string | undefined = undefined;
+      if (!isExtendEnabled && numberOfVideos > 1) {
+        try {
+          const videoUrls = currentStepsState
+            .map((s) => s.videoUrl)
+            .filter((url): url is string => !!url);
+
+          if (videoUrls.length === numberOfVideos) {
+            const stitchRes = await fetch('/api/sandbox/stitch', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                videoUrls,
+                filename: `stitched_${runId}.mp4`,
+              }),
+            });
+            if (stitchRes.ok) {
+              const stitchData = await stitchRes.json();
+              stitchedVideoUrl = stitchData.videoUrl;
+            } else {
+              console.error('Failed to stitch videos', await stitchRes.text());
+            }
+          }
+        } catch (e) {
+          console.error('Error during stitching:', e);
+        }
+      }
+
       await setDoc(
         runDocRef,
-        { status: 'done', updatedAt: serverTimestamp() },
+        {
+          status: 'done',
+          updatedAt: serverTimestamp(),
+          ...(stitchedVideoUrl ? { stitchedVideoUrl } : {}),
+        },
         { merge: true }
       );
       await setDoc(
@@ -783,7 +867,7 @@ export default function SandboxPage() {
   };
 
   const handleRetryStep = async (stepNumber: number) => {
-    if (!currentRunId) return;
+    if (!currentRunId || !sandboxId) return;
     setIsCreatingVideos(true);
     let currentStepsState = steps;
 
@@ -793,16 +877,161 @@ export default function SandboxPage() {
         ? generatedScript.length
         : clipCount;
 
-    for (let i = stepNumber; i <= numberOfVideos; i++) {
-      currentStepsState = await runStep(i, currentRunId, currentStepsState);
-      const justFinished = currentStepsState.find((s) => s.stepNumber === i);
-      if (justFinished?.status === 'error') {
-        setIsCreatingVideos(false);
-        return; // Stop the chain
+    // Get current run to check if extend is enabled
+    let useExtendAPI = true;
+    const runDoc = await getDoc(
+      doc(collection(db, 'sandbox', sandboxId, 'generatedVideos'), currentRunId)
+    );
+    const runData = runDoc.data();
+    useExtendAPI = runData?.isExtendEnabled ?? true;
+
+    if (!useExtendAPI) {
+      // Regenerate just this step
+      currentStepsState = await runStep(
+        stepNumber,
+        currentRunId,
+        currentStepsState,
+        false
+      );
+      const justFinished = currentStepsState.find(
+        (s) => s.stepNumber === stepNumber
+      );
+
+      if (justFinished?.status !== 'error') {
+        // Restitch videos
+        try {
+          const videoUrls = currentStepsState
+            .map((s) => s.videoUrl)
+            .filter((url): url is string => !!url);
+
+          if (videoUrls.length === numberOfVideos) {
+            const stitchRes = await fetch('/api/sandbox/stitch', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                videoUrls,
+                filename: `stitched_${currentRunId}.mp4`,
+              }),
+            });
+            if (stitchRes.ok) {
+              const stitchData = await stitchRes.json();
+              await setDoc(
+                doc(
+                  collection(db, 'sandbox', sandboxId, 'generatedVideos'),
+                  currentRunId
+                ),
+                { stitchedVideoUrl: stitchData.videoUrl },
+                { merge: true }
+              );
+            }
+          }
+        } catch (e) {
+          console.error('Error during stitching:', e);
+        }
+      }
+    } else {
+      // Chain regenerate
+      for (let i = stepNumber; i <= numberOfVideos; i++) {
+        currentStepsState = await runStep(
+          i,
+          currentRunId,
+          currentStepsState,
+          useExtendAPI
+        );
+        const justFinished = currentStepsState.find((s) => s.stepNumber === i);
+        if (justFinished?.status === 'error') {
+          break;
+        }
       }
     }
 
     setIsCreatingVideos(false);
+  };
+
+  const handleChangeStepVersion = async (
+    stepNumber: number,
+    runId: string,
+    newIndex: number
+  ) => {
+    if (!sandboxId) return;
+
+    const run = runs.find((r) => r.id === runId);
+    let targetSteps = run ? run.steps : steps;
+
+    targetSteps = targetSteps.map((s) => {
+      if (
+        s.stepNumber === stepNumber &&
+        s.videoVersions &&
+        s.videoVersions[newIndex]
+      ) {
+        return {
+          ...s,
+          videoUrl: s.videoVersions[newIndex].url,
+          activeVersionIndex: newIndex,
+        };
+      }
+      return s;
+    });
+
+    if (runId === currentRunId) {
+      setSteps(targetSteps);
+    }
+
+    // Update run history state
+    setRuns((prev) =>
+      prev.map((r) => {
+        if (r.id === runId) {
+          return { ...r, steps: targetSteps };
+        }
+        return r;
+      })
+    );
+
+    // Find the run steps to stitch
+    const targetRun = { steps: targetSteps };
+
+    // Restitch with new configuration
+    try {
+      const videoUrls = targetRun.steps
+        .map((s) => s.videoUrl)
+        .filter((url): url is string => !!url);
+
+      let stitchedVideoUrl = undefined;
+      // Only stitch if we have all parts (or multiple parts)
+      if (videoUrls.length > 1) {
+        const stitchRes = await fetch('/api/sandbox/stitch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            videoUrls,
+            filename: `stitched_${runId}.mp4`,
+          }),
+        });
+        if (stitchRes.ok) {
+          const stitchData = await stitchRes.json();
+          stitchedVideoUrl = stitchData.videoUrl;
+        }
+      }
+
+      // Update DB with the new steps selection and new stitch
+      await setDoc(
+        doc(collection(db, 'sandbox', sandboxId, 'generatedVideos'), runId),
+        {
+          steps: targetRun.steps,
+          ...(stitchedVideoUrl ? { stitchedVideoUrl } : {}),
+        },
+        { merge: true }
+      );
+
+      // Refresh local runs if it's not the current run
+      if (runId !== currentRunId) {
+        setRuns((prev) =>
+          prev.map((r) => (r.id === runId ? { ...r, stitchedVideoUrl } : r))
+        );
+      }
+    } catch (e) {
+      console.error('Error restitching history version change', e);
+    }
   };
 
   const handleRegeneratePrompt = async () => {
@@ -812,16 +1041,25 @@ export default function SandboxPage() {
     try {
       const imgData = await getImageBase64();
       const existingDialogues = generatedScript?.map((s) => s.text) || [];
+      const selectionContext = {
+        goalText: goalText.trim(),
+        aspectRatio,
+        hasHumanSubject: !!avatarImage,
+        isUGC: true,
+      };
+
       const response = await fetch('/api/sandbox/generate-scripts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           goalText: goalText.trim(),
           clipCount,
-          filmDirectionSystem,
+          commonRules: filmDirectionSystem,
           avatarImageBase64: imgData.base64,
           promptOnlyMode: true,
           existingDialogues,
+          styles: filmDirectionSections,
+          selectionContext,
         }),
       });
 
@@ -874,8 +1112,15 @@ export default function SandboxPage() {
       };
 
       if (filmDirectionSystem && avatarBase64) {
-        payload.filmDirectionSystem = filmDirectionSystem;
+        payload.commonRules = filmDirectionSystem;
         payload.avatarImageBase64 = avatarBase64;
+        payload.styles = filmDirectionSections;
+        payload.selectionContext = {
+          goalText: goalText.trim(),
+          aspectRatio,
+          hasHumanSubject: !!avatarImage,
+          isUGC: true,
+        };
       }
 
       const response = await fetch('/api/sandbox/generate-scripts', {
@@ -900,6 +1145,9 @@ export default function SandboxPage() {
           text,
         }));
         setGeneratedScript(newScripts);
+        if (data.topicName) {
+          setTopicName(data.topicName);
+        }
         if (data.videoPrompt) {
           setDefaultVideoPrompt(data.videoPrompt);
           setIsAiGeneratedPrompt(true);
@@ -911,6 +1159,7 @@ export default function SandboxPage() {
             {
               goal: goalText.trim(),
               scripts: newScripts,
+              ...(data.topicName ? { topicName: data.topicName } : {}),
               ...(data.videoPrompt
                 ? { defaultVideoPrompt: data.videoPrompt }
                 : {}),
@@ -1121,12 +1370,34 @@ export default function SandboxPage() {
 
               {generatedScript && generatedScript.length > 0 && (
                 <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex flex-col shrink-0">
-                  <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
+                  <div className="p-4 border-b border-slate-100 flex flex-col gap-3 bg-slate-50/50">
                     <div className="flex items-center gap-2">
                       <FileText className="w-5 h-5 text-violet-500" />
                       <h2 className="font-semibold text-slate-800">
                         Generated Dialogues ({generatedScript.length})
                       </h2>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <Label className="text-sm font-medium text-slate-700 whitespace-nowrap">
+                        Topic Name:
+                      </Label>
+                      <input
+                        type="text"
+                        value={topicName}
+                        placeholder="e.g. AI-Product-Promo"
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setTopicName(val);
+                          if (sandboxId) {
+                            setDoc(
+                              doc(collection(db, 'sandbox'), sandboxId),
+                              { topicName: val },
+                              { merge: true }
+                            );
+                          }
+                        }}
+                        className="flex h-9 w-full rounded-md border border-slate-200 bg-white px-3 py-1 text-sm shadow-sm transition-colors file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-slate-500 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-violet-500 disabled:cursor-not-allowed disabled:opacity-50"
+                      />
                     </div>
                   </div>
                   <div className="p-4 space-y-4">
@@ -1278,6 +1549,47 @@ export default function SandboxPage() {
                         </button>
                       ))}
                     </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label className="text-sm font-medium text-slate-700">
+                      Extend Video
+                    </Label>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => {
+                          setIsExtendEnabled(true);
+                          updateConfigInDb({ isExtendEnabled: true });
+                        }}
+                        className={cn(
+                          'flex-1 py-2 px-3 rounded-lg border text-sm font-medium transition-colors',
+                          isExtendEnabled
+                            ? 'bg-violet-50 border-violet-200 text-violet-700'
+                            : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+                        )}
+                      >
+                        Yes
+                      </button>
+                      <button
+                        onClick={() => {
+                          setIsExtendEnabled(false);
+                          updateConfigInDb({ isExtendEnabled: false });
+                        }}
+                        className={cn(
+                          'flex-1 py-2 px-3 rounded-lg border text-sm font-medium transition-colors',
+                          !isExtendEnabled
+                            ? 'bg-violet-50 border-violet-200 text-violet-700'
+                            : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+                        )}
+                      >
+                        No
+                      </button>
+                    </div>
+                    <p className="text-xs text-slate-500 mt-1">
+                      {isExtendEnabled
+                        ? 'Uses extend APIs to natively generate longer videos.'
+                        : 'Generates independent clips and stitches them using ffmpeg.'}
+                    </p>
                   </div>
 
                   <div className="space-y-4">
@@ -1439,26 +1751,51 @@ export default function SandboxPage() {
                 const isAllDone =
                   steps.length > 0 && steps.every((s) => s.status === 'done');
                 if (!isAllDone) return null;
-                const lastDoneStep = steps[steps.length - 1];
-                if (!lastDoneStep?.videoUrl) return null;
+
+                let finalVideoUrl = '';
+                const activeRun = runs.find((r) => r.id === currentRunId);
+
+                if (activeRun && activeRun.isExtendEnabled === false) {
+                  finalVideoUrl = activeRun.stitchedVideoUrl || '';
+                } else {
+                  const lastDoneStep = steps[steps.length - 1];
+                  finalVideoUrl = lastDoneStep?.videoUrl || '';
+                }
+
+                if (!finalVideoUrl) return null;
+
                 return (
                   <div className="mb-6 bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden p-4">
                     <h3 className="font-semibold text-slate-800 mb-3">
                       Final Complete Video
                     </h3>
                     <video
-                      src={lastDoneStep.videoUrl}
+                      src={finalVideoUrl}
                       controls
                       className="w-full rounded-lg aspect-video object-contain bg-black"
                     />
                     <div className="mt-4 flex justify-end">
-                      <a
-                        href={lastDoneStep.videoUrl}
-                        download
+                      <button
+                        onClick={async () => {
+                          try {
+                            const res = await fetch(finalVideoUrl);
+                            const blob = await res.blob();
+                            const url = window.URL.createObjectURL(blob);
+                            const a = document.createElement('a');
+                            a.href = url;
+                            a.download = `${topicName || 'complete-video'}-${Date.now()}.mp4`;
+                            document.body.appendChild(a);
+                            a.click();
+                            window.URL.revokeObjectURL(url);
+                            document.body.removeChild(a);
+                          } catch (err) {
+                            console.error('Download failed', err);
+                          }
+                        }}
                         className="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors h-9 px-4 gap-2 text-white bg-violet-600 hover:bg-violet-700 shadow-sm"
                       >
                         <Download className="w-4 h-4" /> Download Complete Video
-                      </a>
+                      </button>
                     </div>
                   </div>
                 );
@@ -1492,7 +1829,8 @@ export default function SandboxPage() {
                           <div className="flex items-center gap-2">
                             <h3 className="font-medium text-slate-800">
                               {idx === steps.length - 1 &&
-                              step.status === 'done'
+                              step.status === 'done' &&
+                              isExtendEnabled
                                 ? 'Final Video'
                                 : `Step ${step.stepNumber}`}
                             </h3>
@@ -1502,33 +1840,118 @@ export default function SandboxPage() {
                               </span>
                             )}
                           </div>
-                          <div className="flex items-center gap-2">
-                            {step.status === 'generating' && (
-                              <span className="text-xs font-medium text-amber-600 bg-amber-50 px-2 py-1 rounded-full flex items-center gap-1">
-                                <div className="w-3 h-3 border-2 border-amber-500 border-t-transparent rounded-full animate-spin" />
-                                Generating
-                              </span>
-                            )}
-                            {step.status === 'done' && step.videoUrl && (
-                              <span className="text-xs font-medium text-emerald-600 bg-emerald-50 px-2 py-1 rounded-full">
-                                Completed
-                              </span>
-                            )}
-                            {step.status === 'done' && !step.videoUrl && (
-                              <span className="text-xs font-medium text-amber-600 bg-amber-50 px-2 py-1 rounded-full">
-                                No Data
-                              </span>
-                            )}
-                            {step.status === 'error' && (
-                              <span className="text-xs font-medium text-red-600 bg-red-50 px-2 py-1 rounded-full">
-                                Error
-                              </span>
-                            )}
-                            {step.status === 'idle' && (
-                              <span className="text-xs font-medium text-slate-500 bg-slate-100 px-2 py-1 rounded-full">
-                                Waiting
-                              </span>
-                            )}
+                          <div className="flex flex-col items-end gap-2">
+                            <div className="flex items-center gap-2">
+                              {step.status === 'generating' && (
+                                <span className="text-xs font-medium text-amber-600 bg-amber-50 px-2 py-1 rounded-full flex items-center gap-1">
+                                  <div className="w-3 h-3 border-2 border-amber-500 border-t-transparent rounded-full animate-spin" />
+                                  Generating
+                                </span>
+                              )}
+                              {step.status === 'done' && step.videoUrl && (
+                                <span className="text-xs font-medium text-emerald-600 bg-emerald-50 px-2 py-1 rounded-full">
+                                  Completed
+                                </span>
+                              )}
+                              {step.status === 'done' && !step.videoUrl && (
+                                <span className="text-xs font-medium text-amber-600 bg-amber-50 px-2 py-1 rounded-full">
+                                  No Data
+                                </span>
+                              )}
+                              {step.status === 'error' && (
+                                <span className="text-xs font-medium text-red-600 bg-red-50 px-2 py-1 rounded-full">
+                                  Error
+                                </span>
+                              )}
+                              {step.status === 'idle' && (
+                                <span className="text-xs font-medium text-slate-500 bg-slate-100 px-2 py-1 rounded-full">
+                                  Waiting
+                                </span>
+                              )}
+                            </div>
+
+                            {step.status === 'done' &&
+                              (!step.videoVersions ||
+                                step.videoVersions.length === 0) && (
+                                <div className="flex items-center gap-2 bg-slate-100 rounded-md p-1 mt-1 justify-end">
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    className="h-6 px-2 text-xs font-medium text-violet-600 hover:text-violet-700 gap-1"
+                                    disabled={isCreatingVideos}
+                                    onClick={() =>
+                                      handleRetryStep(step.stepNumber)
+                                    }
+                                  >
+                                    <RotateCcw className="w-3 h-3" />
+                                    Regenerate
+                                  </Button>
+                                </div>
+                              )}
+                            {step.status === 'done' &&
+                              step.videoVersions &&
+                              step.videoVersions.length > 0 && (
+                                <div className="flex items-center gap-2 bg-slate-100 rounded-md p-1 mt-1 justify-between w-full">
+                                  <div className="flex items-center">
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      className="h-6 w-6 p-0"
+                                      disabled={step.activeVersionIndex === 0}
+                                      onClick={() =>
+                                        handleChangeStepVersion(
+                                          step.stepNumber,
+                                          currentRunId!,
+                                          (step.activeVersionIndex || 0) - 1
+                                        )
+                                      }
+                                    >
+                                      <ChevronDown className="w-4 h-4 rotate-90" />
+                                    </Button>
+                                    <span className="text-xs font-medium text-slate-600 min-w-[70px] text-center">
+                                      Version{' '}
+                                      {
+                                        step.videoVersions[
+                                          step.activeVersionIndex || 0
+                                        ].version
+                                      }
+                                    </span>
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      className="h-6 w-6 p-0"
+                                      disabled={
+                                        step.activeVersionIndex ===
+                                        step.videoVersions.length - 1
+                                      }
+                                      onClick={() =>
+                                        handleChangeStepVersion(
+                                          step.stepNumber,
+                                          currentRunId!,
+                                          (step.activeVersionIndex || 0) + 1
+                                        )
+                                      }
+                                    >
+                                      <ChevronDown className="w-4 h-4 -rotate-90" />
+                                    </Button>
+                                  </div>
+                                  <div className="flex items-center">
+                                    <div className="w-px h-4 bg-slate-200 mx-1" />
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      className="h-6 px-2 text-xs font-medium text-violet-600 hover:text-violet-700 gap-1"
+                                      disabled={isCreatingVideos}
+                                      onClick={() =>
+                                        handleRetryStep(step.stepNumber)
+                                      }
+                                    >
+                                      <RotateCcw className="w-3 h-3" />
+                                      Regenerate
+                                    </Button>
+                                  </div>
+                                </div>
+                              )}
                           </div>
                         </div>
                         {step.dialogue && (
@@ -1540,8 +1963,11 @@ export default function SandboxPage() {
                           </div>
                         )}
                         {step.status === 'generating' && (
-                          <div className="aspect-video bg-slate-100 rounded-lg animate-pulse flex items-center justify-center">
-                            <ImageIcon className="w-8 h-8 text-slate-300" />
+                          <div className="aspect-video bg-slate-100 rounded-lg flex flex-col items-center justify-center gap-3">
+                            <div className="w-8 h-8 rounded-full border-4 border-violet-200 border-t-violet-600 animate-spin" />
+                            <span className="text-sm font-medium text-slate-500">
+                              Generating video...
+                            </span>
                           </div>
                         )}
                         {step.status === 'done' && step.videoUrl && (
@@ -1549,7 +1975,7 @@ export default function SandboxPage() {
                             <video
                               src={step.videoUrl}
                               controls
-                              className="w-full rounded-lg aspect-video object-cover bg-black"
+                              className="w-full rounded-lg aspect-video object-contain bg-black"
                             />
                             {step.videoReferenceUrl && (
                               <div className="mt-2 text-xs">
@@ -1564,8 +1990,8 @@ export default function SandboxPage() {
                                 </a>
                               </div>
                             )}
-                            {idx === steps.length - 1 && (
-                              <div className="mt-3 flex justify-end">
+                            {idx === steps.length - 1 && isExtendEnabled && (
+                              <div className="mt-3 flex items-center justify-end">
                                 <a
                                   href={step.videoUrl}
                                   download
@@ -1680,28 +2106,63 @@ export default function SandboxPage() {
                                           (s) => s.status === 'done'
                                         );
                                       if (!isAllDone) return null;
-                                      const lastDoneStep =
-                                        run.steps[run.steps.length - 1];
-                                      if (!lastDoneStep?.videoUrl) return null;
+                                      let finalVideoUrl = '';
+                                      if (run.isExtendEnabled === false) {
+                                        finalVideoUrl =
+                                          run.stitchedVideoUrl || '';
+                                      } else {
+                                        const lastDoneStep =
+                                          run.steps[run.steps.length - 1];
+                                        finalVideoUrl =
+                                          lastDoneStep?.videoUrl || '';
+                                      }
+                                      if (!finalVideoUrl) return null;
                                       return (
                                         <div className="mb-4">
                                           <div className="text-sm font-semibold text-slate-800 mb-2">
-                                            Final Complete Video
+                                            Final Complete Video{' '}
+                                            {run.topicName
+                                              ? `(${run.topicName})`
+                                              : ''}
                                           </div>
                                           <video
-                                            src={lastDoneStep.videoUrl}
+                                            src={finalVideoUrl}
                                             controls
-                                            className="w-full rounded-lg aspect-video object-cover bg-black"
+                                            className="w-full rounded-lg aspect-video object-contain bg-black"
                                           />
                                           <div className="mt-2 flex justify-end">
-                                            <a
-                                              href={lastDoneStep.videoUrl}
-                                              download
+                                            <button
+                                              onClick={async () => {
+                                                try {
+                                                  const res =
+                                                    await fetch(finalVideoUrl);
+                                                  const blob = await res.blob();
+                                                  const url =
+                                                    window.URL.createObjectURL(
+                                                      blob
+                                                    );
+                                                  const a =
+                                                    document.createElement('a');
+                                                  a.href = url;
+                                                  a.download = `${run.topicName || 'complete-video'}-${Date.now()}.mp4`;
+                                                  document.body.appendChild(a);
+                                                  a.click();
+                                                  window.URL.revokeObjectURL(
+                                                    url
+                                                  );
+                                                  document.body.removeChild(a);
+                                                } catch (err) {
+                                                  console.error(
+                                                    'Download failed',
+                                                    err
+                                                  );
+                                                }
+                                              }}
                                               className="inline-flex items-center justify-center rounded-md text-xs font-medium transition-colors h-7 px-3 gap-1.5 text-white bg-violet-600 hover:bg-violet-700 shadow-sm"
                                             >
                                               <Download className="w-3 h-3" />{' '}
                                               Download
-                                            </a>
+                                            </button>
                                           </div>
                                         </div>
                                       );
@@ -1711,15 +2172,74 @@ export default function SandboxPage() {
                                         (a, b) => a.stepNumber - b.stepNumber
                                       )
                                       .map((step) => (
-                                        <div key={step.stepNumber}>
-                                          <div className="text-xs font-medium text-slate-600 mb-1.5">
-                                            Step {step.stepNumber}
+                                        <div
+                                          key={step.stepNumber}
+                                          className="relative"
+                                        >
+                                          <div className="flex justify-between items-center mb-1.5">
+                                            <div className="text-xs font-medium text-slate-600">
+                                              Step {step.stepNumber}
+                                            </div>
+                                            {step.videoVersions &&
+                                              step.videoVersions.length > 0 && (
+                                                <div className="flex items-center gap-1 bg-slate-100 rounded p-0.5">
+                                                  <Button
+                                                    variant="ghost"
+                                                    size="sm"
+                                                    className="h-5 w-5 p-0"
+                                                    disabled={
+                                                      step.activeVersionIndex ===
+                                                      0
+                                                    }
+                                                    onClick={() =>
+                                                      handleChangeStepVersion(
+                                                        step.stepNumber,
+                                                        run.id,
+                                                        (step.activeVersionIndex ||
+                                                          0) - 1
+                                                      )
+                                                    }
+                                                  >
+                                                    <ChevronDown className="w-3 h-3 rotate-90" />
+                                                  </Button>
+                                                  <span className="text-[10px] font-medium text-slate-500 min-w-[50px] text-center">
+                                                    Ver{' '}
+                                                    {
+                                                      step.videoVersions[
+                                                        step.activeVersionIndex ||
+                                                          0
+                                                      ].version
+                                                    }
+                                                  </span>
+                                                  <Button
+                                                    variant="ghost"
+                                                    size="sm"
+                                                    className="h-5 w-5 p-0"
+                                                    disabled={
+                                                      step.activeVersionIndex ===
+                                                      step.videoVersions
+                                                        .length -
+                                                        1
+                                                    }
+                                                    onClick={() =>
+                                                      handleChangeStepVersion(
+                                                        step.stepNumber,
+                                                        run.id,
+                                                        (step.activeVersionIndex ||
+                                                          0) + 1
+                                                      )
+                                                    }
+                                                  >
+                                                    <ChevronDown className="w-3 h-3 -rotate-90" />
+                                                  </Button>
+                                                </div>
+                                              )}
                                           </div>
                                           {step.videoUrl && (
                                             <video
                                               src={step.videoUrl}
                                               controls
-                                              className="w-full rounded-lg aspect-video object-cover bg-black"
+                                              className="w-full rounded-lg aspect-video object-contain bg-black"
                                             />
                                           )}
                                         </div>
