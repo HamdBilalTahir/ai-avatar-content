@@ -223,6 +223,15 @@ src/
 yarn dev        # Development server
 yarn build      # Production build
 yarn typecheck  # TypeScript check
-yarn test       # Jest test suite
+yarn test       # Jest unit tests
 yarn lint       # ESLint
+
+# E2E browser tests (Playwright)
+npm run test:e2e                          # Headless (unauthenticated suite only)
+npm run test:e2e:ui                       # Interactive UI mode
+
+# With a Firebase test account (enables authenticated suite):
+TEST_USER_EMAIL=user@example.com TEST_USER_PASSWORD=password npm run test:e2e
 ```
+
+Copy `.env.test.example` → `.env.test.local` to persist test credentials locally.

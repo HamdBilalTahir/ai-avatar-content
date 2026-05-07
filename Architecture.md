@@ -48,7 +48,7 @@ The app has three distinct product areas accessible via a left sidebar:
 | Language             | ✅ Done | TypeScript strict mode                                              |
 | Styling              | ✅ Done | Tailwind CSS v4                                                     |
 | Linting / Formatting | ✅ Done | ESLint 9 + Prettier                                                 |
-| Testing              | ✅ Done | Jest 30 + React Testing Library                                     |
+| Testing              | ✅ Done | Jest 30 + React Testing Library + Playwright e2e                    |
 | Git Hooks            | ✅ Done | Husky + lint-staged                                                 |
 | Shared Types         | ✅ Done | `src/lib/types.ts`                                                  |
 | Redis / Job State    | ✅ Done | Upstash Redis via `src/lib/redis.ts` + `src/lib/jobs.ts`            |
@@ -117,6 +117,7 @@ The app has three distinct product areas accessible via a left sidebar:
 | Component Testing | @testing-library/react    | ^16.3.2 |
 | DOM Assertions    | @testing-library/jest-dom | ^6.9.1  |
 | TS Transform      | ts-jest                   | ^29.4.6 |
+| E2E Browser Tests | Playwright                | ^1.59.1 |
 
 ### Code Quality
 
@@ -738,6 +739,8 @@ Key settings in `tsconfig.json`:
 
 ## 14. Testing Architecture
 
+### Unit / Component Tests (Jest)
+
 ```
 Jest 30
   └── next/jest (Next.js integration)
@@ -747,9 +750,39 @@ Jest 30
 ```
 
 ```bash
-yarn test           # Run all tests
+yarn test           # Run all unit tests
 yarn test --watch   # Watch mode
 ```
+
+### E2E Browser Tests (Playwright)
+
+```
+Playwright
+  └── playwright.config.ts
+       ├── project: unauthenticated  →  tests/e2e/auth.spec.ts
+       │                                tests/e2e/pages.spec.ts
+       └── project: authenticated   →  tests/e2e/authenticated/*.spec.ts
+            └── fixtures/auth.ts        signs in via UI before each test
+                                        suppresses onboarding modal via addInitScript
+```
+
+Test suites:
+
+- **`auth.spec.ts`** — login form, error states, forgot password, redirect flows (29 tests)
+- **`pages.spec.ts`** — protected route redirects, form UI, navigation (unauthenticated)
+- **`authenticated/navigation.spec.ts`** — all protected pages load, avatar UI, settings, prompt chips (15 tests)
+
+```bash
+npm run test:e2e                          # Run all e2e tests (headless)
+npm run test:e2e:ui                       # Playwright UI mode (interactive)
+
+# Authenticated tests require a Firebase test account:
+TEST_USER_EMAIL=user@example.com \
+TEST_USER_PASSWORD=password \
+npm run test:e2e
+```
+
+Credentials template: `.env.test.example` → copy to `.env.test.local` (gitignored).
 
 ---
 
