@@ -32,6 +32,7 @@ export async function POST(request: Request): Promise<NextResponse> {
   try {
     const blob = await put(blobPath, request.body as ReadableStream, {
       access: 'public',
+      allowOverwrite: true,
     });
 
     return NextResponse.json(blob);

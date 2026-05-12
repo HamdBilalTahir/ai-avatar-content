@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { generateVertexText } from '@/services/vertex-video';
 import { resolveOutputPath } from '@/lib/video-output';
+import { processSandboxCompletion } from '@/lib/sandbox-updater';
 import { VEO_HARDCODED_INJECTIONS } from '@/lib/veo-injections';
 import fs from 'fs/promises';
 
@@ -10,6 +11,8 @@ export async function POST(req: NextRequest) {
   try {
     const {
       prompt,
+      defaultPrompt,
+      clipDialogue,
       modelName,
       duration,
       resolution,
@@ -18,9 +21,17 @@ export async function POST(req: NextRequest) {
       vertexLocation,
       shotNumber,
       existingCount,
+      sandboxId,
+      runId,
+      stepNumber,
     } = await req.json();
 
-    if (!prompt)
+    const finalPrompt =
+      defaultPrompt && clipDialogue
+        ? `${defaultPrompt}. ${clipDialogue}`
+        : prompt;
+
+    if (!finalPrompt)
       return NextResponse.json(
         { error: 'prompt is required' },
         { status: 400 }
@@ -37,9 +48,9 @@ export async function POST(req: NextRequest) {
     );
 
     const NEGATIVE_PROMPT =
-      'slow speech, long pauses, continued talking after dialogue ends, extra lip movement, mumbling';
+      'slow speech, long pauses, continued talking after dialogue ends, extra lip movement, mumbling, background music, music soundtrack, ambient music';
 
-    const enhancedPrompt = `${prompt}\n\n${VEO_HARDCODED_INJECTIONS}`;
+    const enhancedPrompt = `${finalPrompt}\n\n${VEO_HARDCODED_INJECTIONS}`;
 
     const res = await generateVertexText({
       prompt: enhancedPrompt,
@@ -55,14 +66,24 @@ export async function POST(req: NextRequest) {
 
     if (res?.outputName) {
       const buffer = await fs.readFile(res.outputName);
-      return new NextResponse(buffer, {
-        status: 200,
-        headers: {
-          'Content-Type': 'video/mp4',
-          'Content-Length': buffer.byteLength.toString(),
-          'X-Video-Filename': outputFilename,
-          'Cache-Control': 'no-store',
-        },
+
+      let videoUrl: string | undefined;
+      let videoReferenceUrl: string | undefined;
+      if (sandboxId && runId && stepNumber) {
+        const uploadRes = await processSandboxCompletion({
+          buffer,
+          sandboxId,
+          runId,
+          stepNumber,
+        });
+        videoUrl = uploadRes.videoUrl;
+        videoReferenceUrl = uploadRes.videoReferenceUrl;
+      }
+
+      return NextResponse.json({
+        video_url: videoUrl,
+        output_name: outputFilename,
+        video_reference_url: videoReferenceUrl,
       });
     }
 

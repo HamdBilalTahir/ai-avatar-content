@@ -1,4 +1,8 @@
-import { GoogleGenAI, VideoGenerationReferenceType } from '@google/genai';
+import {
+  GoogleGenAI,
+  PersonGeneration,
+  VideoGenerationReferenceType,
+} from '@google/genai';
 import crypto from 'crypto';
 import fs from 'fs/promises';
 import path from 'path';
@@ -90,6 +94,7 @@ function buildConfig(
     aspectRatio: aspectRatio || '9:16',
     durationSeconds: Number(duration) || 8,
     resolution: resolution || '720p',
+    personGeneration: PersonGeneration.ALLOW_ALL,
     ...(negativePrompt ? { negativePrompt } : {}),
   };
 }

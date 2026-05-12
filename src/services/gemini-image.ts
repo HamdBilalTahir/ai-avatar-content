@@ -1,4 +1,4 @@
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import { GoogleGenAI } from '@google/genai';
 import type { ReferenceImage } from '@/lib/types';
 
 export async function generateAvatarImage(
@@ -12,11 +12,7 @@ export async function generateAvatarImage(
     throw new Error('Missing GEMINI_API_KEY');
   }
 
-  const genAI = new GoogleGenerativeAI(resolvedKey);
-  const model = genAI.getGenerativeModel({
-    model: 'gemini-3.1-flash-image-preview',
-    // model: 'gemini-3-pro-image-preview',
-  });
+  const ai = new GoogleGenAI({ apiKey: resolvedKey });
 
   const hasRefs = referenceImages && referenceImages.length > 0;
   const negSuffix = negativePrompt?.trim()
@@ -26,8 +22,16 @@ export async function generateAvatarImage(
     ? `Using the provided reference image${referenceImages!.length > 1 ? 's' : ''} as a visual guide, generate an image that matches this description: ${avatarPrompt}${negSuffix}`
     : `${avatarPrompt}${negSuffix}`;
 
-  let result;
-  const TIMEOUT_MS = 120_000; // 2 minutes
+  const contents: any[] = [{ text: textPrompt }];
+  if (hasRefs) {
+    for (const img of referenceImages!) {
+      contents.push({
+        inlineData: { mimeType: img.mime_type, data: img.data },
+      });
+    }
+  }
+
+  const TIMEOUT_MS = 120_000;
   console.log(`[gemini-image] 🚀 starting generation — hasRefs=${hasRefs}`);
   const start = Date.now();
   const pingInterval = setInterval(() => {
@@ -36,22 +40,15 @@ export async function generateAvatarImage(
     );
   }, 5000);
 
+  let response: any;
   try {
-    const generatePromise = hasRefs
-      ? model.generateContent({
-          contents: [
-            {
-              role: 'user',
-              parts: [
-                ...referenceImages!.map((img) => ({
-                  inlineData: { mimeType: img.mime_type, data: img.data },
-                })),
-                { text: textPrompt },
-              ],
-            },
-          ],
-        })
-      : model.generateContent(textPrompt);
+    const generatePromise = ai.models.generateContent({
+      model: 'gemini-3.1-flash-image-preview',
+      contents,
+      config: {
+        responseModalities: ['TEXT', 'IMAGE'],
+      },
+    });
 
     const timeoutPromise = new Promise<never>((_, reject) =>
       setTimeout(
@@ -65,7 +62,7 @@ export async function generateAvatarImage(
       )
     );
 
-    result = await Promise.race([generatePromise, timeoutPromise]);
+    response = await Promise.race([generatePromise, timeoutPromise]);
     console.log(
       `[gemini-image] ✅ generation complete in ${Math.round((Date.now() - start) / 1000)}s`
     );
@@ -76,8 +73,8 @@ export async function generateAvatarImage(
     clearInterval(pingInterval);
   }
 
-  const parts = result.response.candidates?.[0]?.content?.parts ?? [];
-  const imagePart = parts.find((p) =>
+  const parts = response.candidates?.[0]?.content?.parts ?? [];
+  const imagePart = parts.find((p: any) =>
     p.inlineData?.mimeType?.startsWith('image/')
   );
 

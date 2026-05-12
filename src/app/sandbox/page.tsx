@@ -15,6 +15,9 @@ import {
   Download,
   PanelLeftClose,
   PanelLeftOpen,
+  Trash2,
+  Pencil,
+  Square,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -35,8 +38,17 @@ import { useAuth } from '@/lib/AuthContext';
 import { useProvider } from '@/lib/ProviderContext';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import ProviderBadge from '@/components/ProviderBadge';
 import { DEFAULT_VIDEO_PROMPT } from './constants';
+import { extractAudioLocally } from '@/lib/client-ffmpeg';
 
 export type StepSlot = {
   stepNumber: number;
@@ -90,13 +102,25 @@ function modelShortName(m: string): string {
   return m;
 }
 
+type AvatarImageEntry = {
+  id: string;
+  file?: File;
+  previewUrl: string;
+  blobUrl?: string;
+  assignedTo: 'all' | number[];
+};
+
+type ScriptItem = {
+  id: number;
+  text: string;
+  visualPrompt?: string;
+};
+
 export default function SandboxPage() {
   const { user } = useAuth();
   const { providerConfig } = useProvider();
-  const [avatarImage, setAvatarImage] = useState<{
-    file?: File;
-    previewUrl: string;
-  } | null>(null);
+  const [avatarImages, setAvatarImages] = useState<AvatarImageEntry[]>([]);
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const [targetDuration, setTargetDuration] = useState<number>(36);
   const [aspectRatio, setAspectRatio] = useState<'16:9' | '9:16'>('16:9');
   const clipCount = 1 + Math.floor((targetDuration - 8) / 7);
@@ -111,9 +135,9 @@ export default function SandboxPage() {
   // Script Generation State
   const [goalText, setGoalText] = useState<string>('');
   const [topicName, setTopicName] = useState<string>('');
-  const [generatedScript, setGeneratedScript] = useState<
-    { id: number; text: string }[] | null
-  >(null);
+  const [generatedScript, setGeneratedScript] = useState<ScriptItem[] | null>(
+    null
+  );
   const [isGeneratingScript, setIsGeneratingScript] = useState<boolean>(false);
   const [filmDirectionSystem, setFilmDirectionSystem] = useState<string | null>(
     null
@@ -133,6 +157,13 @@ export default function SandboxPage() {
   const [sandboxId, setSandboxId] = useState<string | null>(null);
   const [sandboxes, setSandboxes] = useState<any[]>([]);
   const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(true);
+  const [sandboxToDelete, setSandboxToDelete] = useState<{
+    id: string;
+    name: string;
+  } | null>(null);
+  const [isDeletingSandbox, setIsDeletingSandbox] = useState(false);
+  const [isDownloadingFinalAudio, setIsDownloadingFinalAudio] = useState(false);
+  const [ffmpegProgress, setFfmpegProgress] = useState<string | null>(null);
   const [isCreatingSandbox, setIsCreatingSandbox] = useState<boolean>(false);
   const [isCreatingVideos, setIsCreatingVideos] = useState<boolean>(false);
 
@@ -140,8 +171,20 @@ export default function SandboxPage() {
   const [currentRunId, setCurrentRunId] = useState<string | null>(null);
   const [expandedRunIds, setExpandedRunIds] = useState<Set<string>>(new Set());
 
+  const [expandedClipPromptIndex, setExpandedClipPromptIndex] = useState<
+    number | null
+  >(null);
+  const [regeneratingClipPromptIndex, setRegeneratingClipPromptIndex] =
+    useState<number | null>(null);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const isCreatingVideosRef = useRef<boolean>(false);
+  const assignmentSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  );
+  const clipPromptSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  );
 
   useEffect(() => {
     isCreatingVideosRef.current = isCreatingVideos;
@@ -196,7 +239,7 @@ export default function SandboxPage() {
     setGoalText('');
     setTopicName('');
     setGeneratedScript(null);
-    setAvatarImage(null);
+    setAvatarImages([]);
     setSteps([]);
     setRuns([]);
     setCurrentRunId(null);
@@ -211,8 +254,24 @@ export default function SandboxPage() {
           const snap = await getDoc(doc(collection(db, 'sandbox'), sandboxId));
           if (snap.exists()) {
             const data = snap.data();
-            if (data.referenceImage && !avatarImage?.previewUrl) {
-              setAvatarImage({ previewUrl: data.referenceImage });
+            if (data.referenceImages && Array.isArray(data.referenceImages)) {
+              setAvatarImages(
+                data.referenceImages.map((img: any) => ({
+                  id: img.id || crypto.randomUUID(),
+                  previewUrl: img.url,
+                  blobUrl: img.url,
+                  assignedTo: img.assignedTo ?? 'all',
+                }))
+              );
+            } else if (data.referenceImage) {
+              setAvatarImages([
+                {
+                  id: crypto.randomUUID(),
+                  previewUrl: data.referenceImage,
+                  blobUrl: data.referenceImage,
+                  assignedTo: 'all',
+                },
+              ]);
             }
             if (data.config) {
               if (data.config.aspectRatio)
@@ -231,7 +290,14 @@ export default function SandboxPage() {
             if (data.topicName) setTopicName(data.topicName);
             if (data.defaultVideoPrompt)
               setDefaultVideoPrompt(data.defaultVideoPrompt);
-            if (data.scripts) setGeneratedScript(data.scripts);
+            if (data.scripts)
+              setGeneratedScript(
+                data.scripts.map((s: any) => ({
+                  id: s.id,
+                  text: s.text,
+                  ...(s.visualPrompt ? { visualPrompt: s.visualPrompt } : {}),
+                }))
+              );
           }
         } catch (error) {
           console.error('Failed to fetch sandbox data:', error);
@@ -328,20 +394,80 @@ export default function SandboxPage() {
                   handleRetryStep(nextIdleStep.stepNumber);
                 }
               } else {
-                setIsCreatingVideos(false);
-                setDoc(
-                  doc(
-                    collection(db, 'sandbox', sandboxId, 'generatedVideos'),
-                    currentRunId
-                  ),
-                  { status: 'done', updatedAt: serverTimestamp() },
-                  { merge: true }
-                );
-                setDoc(
-                  doc(collection(db, 'sandbox'), sandboxId),
-                  { status: 'done' },
-                  { merge: true }
-                );
+                // All steps are done. If handleCreateVideos is still running it
+                // will stitch itself — skip here to avoid racing it.
+                if (!isCreatingVideosRef.current) {
+                  setIsCreatingVideos(false);
+                  const needsStitch =
+                    data.isExtendEnabled === false &&
+                    !data.stitchedVideoUrl &&
+                    (data.steps as any[]).filter((s: any) => !!s.videoUrl)
+                      .length > 1;
+
+                  if (needsStitch) {
+                    console.log('[Poll] All steps done, triggering stitch');
+                    const videoUrls = (data.steps as any[])
+                      .map((s: any) => s.videoUrl)
+                      .filter((u): u is string => !!u);
+                    fetch('/api/sandbox/stitch', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        videoUrls,
+                        filename: `stitched_${sandboxId}_${currentRunId}.mp4`,
+                      }),
+                    })
+                      .then(async (stitchRes) => {
+                        if (stitchRes.ok) {
+                          const stitchData = await stitchRes.json();
+                          await setDoc(
+                            doc(
+                              collection(
+                                db,
+                                'sandbox',
+                                sandboxId,
+                                'generatedVideos'
+                              ),
+                              currentRunId
+                            ),
+                            {
+                              stitchedVideoUrl: stitchData.videoUrl,
+                              status: 'done',
+                              updatedAt: serverTimestamp(),
+                            },
+                            { merge: true }
+                          );
+                          await setDoc(
+                            doc(collection(db, 'sandbox'), sandboxId),
+                            { status: 'done' },
+                            { merge: true }
+                          );
+                          await loadRunsForSandbox(sandboxId);
+                        } else {
+                          console.error(
+                            '[Poll] Stitch failed',
+                            await stitchRes.text()
+                          );
+                        }
+                      })
+                      .catch((e) => console.error('[Poll] Stitch error:', e));
+                  } else {
+                    setDoc(
+                      doc(
+                        collection(db, 'sandbox', sandboxId, 'generatedVideos'),
+                        currentRunId
+                      ),
+                      { status: 'done', updatedAt: serverTimestamp() },
+                      { merge: true }
+                    );
+                    setDoc(
+                      doc(collection(db, 'sandbox'), sandboxId),
+                      { status: 'done' },
+                      { merge: true }
+                    );
+                    loadRunsForSandbox(sandboxId);
+                  }
+                }
               }
             }
           }
@@ -412,6 +538,32 @@ export default function SandboxPage() {
     }
   };
 
+  const handleDeleteSandbox = async () => {
+    if (!sandboxToDelete) return;
+    setIsDeletingSandbox(true);
+    try {
+      const { deleteDoc } = await import('firebase/firestore');
+      await deleteDoc(doc(collection(db, 'sandbox'), sandboxToDelete.id));
+      if (sandboxId === sandboxToDelete.id) {
+        setSandboxId(null);
+        setGoalText('');
+        setTopicName('');
+        setGeneratedScript(null);
+        setAvatarImages([]);
+        setSteps([]);
+        setRuns([]);
+        setCurrentRunId(null);
+        setExpandedRunIds(new Set());
+      }
+    } catch (error: any) {
+      console.error('Failed to delete sandbox:', error);
+      alert('Failed to delete sandbox: ' + error.message);
+    } finally {
+      setIsDeletingSandbox(false);
+      setSandboxToDelete(null);
+    }
+  };
+
   const handleCreateSandbox = async () => {
     if (!user) return;
     setIsCreatingSandbox(true);
@@ -427,7 +579,7 @@ export default function SandboxPage() {
       setGoalText('');
       setTopicName('');
       setGeneratedScript(null);
-      setAvatarImage(null);
+      setAvatarImages([]);
       setSteps([]);
       setRuns([]);
       setCurrentRunId(null);
@@ -440,97 +592,155 @@ export default function SandboxPage() {
     }
   };
 
-  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file || !sandboxId) return;
+  const saveImagesToFirestore = async (images: AvatarImageEntry[]) => {
+    if (!sandboxId) return;
+    await setDoc(
+      doc(collection(db, 'sandbox'), sandboxId),
+      {
+        referenceImages: images.map((img) => ({
+          id: img.id,
+          url: img.blobUrl || img.previewUrl,
+          assignedTo: img.assignedTo,
+        })),
+      },
+      { merge: true }
+    );
+  };
 
-    if (avatarImage?.previewUrl) {
-      URL.revokeObjectURL(avatarImage.previewUrl);
-    }
+  const handleAddImage = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []);
+    if (files.length === 0 || !sandboxId) return;
+    if (fileInputRef.current) fileInputRef.current.value = '';
 
-    const previewUrl = URL.createObjectURL(file);
-    setAvatarImage({ file, previewUrl });
+    const newEntries: AvatarImageEntry[] = files.map((file) => ({
+      id: crypto.randomUUID(),
+      file,
+      previewUrl: URL.createObjectURL(file),
+      assignedTo: 'all',
+    }));
+    const updated = [...avatarImages, ...newEntries];
+    setAvatarImages(updated);
 
     try {
-      const avatarExt = file.name.split('.').pop() || 'png';
-      const avatarBlobUrl = await uploadToVercelBlob(
-        file,
-        `sandbox/${sandboxId}/avatar.${avatarExt}`
+      const withBlobs = await Promise.all(
+        newEntries.map(async (entry) => {
+          const ext = entry.file!.name.split('.').pop() || 'png';
+          const blobUrl = await uploadToVercelBlob(
+            entry.file!,
+            `sandbox/${sandboxId}/avatar_${entry.id}.${ext}`
+          );
+          return { ...entry, blobUrl };
+        })
       );
-
-      await setDoc(
-        doc(collection(db, 'sandbox'), sandboxId),
-        {
-          referenceImage: avatarBlobUrl,
-        },
-        { merge: true }
-      );
+      const final = updated.map((img) => {
+        const uploaded = withBlobs.find((b) => b.id === img.id);
+        return uploaded ?? img;
+      });
+      setAvatarImages(final);
+      await saveImagesToFirestore(final);
     } catch (err) {
       console.error('Failed to upload image', err);
     }
   };
 
-  const removeImage = async () => {
-    if (avatarImage?.previewUrl) {
-      URL.revokeObjectURL(avatarImage.previewUrl);
+  const removeAvatarImage = async (id: string) => {
+    const img = avatarImages.find((i) => i.id === id);
+    if (img?.previewUrl && img.previewUrl.startsWith('blob:')) {
+      URL.revokeObjectURL(img.previewUrl);
     }
-    setAvatarImage(null);
-    if (fileInputRef.current) {
-      fileInputRef.current.value = '';
-    }
-    if (sandboxId) {
-      await setDoc(
-        doc(collection(db, 'sandbox'), sandboxId),
-        {
-          referenceImage: null,
-        },
-        { merge: true }
+    const updated = avatarImages.filter((i) => i.id !== id);
+    setAvatarImages(updated);
+    await saveImagesToFirestore(updated);
+  };
+
+  const replaceAvatarImage = async (id: string, file: File) => {
+    const existing = avatarImages.find((i) => i.id === id);
+    if (!existing || !sandboxId) return;
+    if (existing.previewUrl?.startsWith('blob:'))
+      URL.revokeObjectURL(existing.previewUrl);
+    const previewUrl = URL.createObjectURL(file);
+    const updated = avatarImages.map((img) =>
+      img.id === id ? { ...img, file, previewUrl, blobUrl: undefined } : img
+    );
+    setAvatarImages(updated);
+    try {
+      const ext = file.name.split('.').pop() || 'png';
+      const blobUrl = await uploadToVercelBlob(
+        file,
+        `sandbox/${sandboxId}/avatar_${id}.${ext}`
       );
+      const final = updated.map((img) =>
+        img.id === id ? { ...img, blobUrl } : img
+      );
+      setAvatarImages(final);
+      await saveImagesToFirestore(final);
+    } catch (err) {
+      console.error('Failed to replace image', err);
     }
+  };
+
+  const updateImageAssignment = (id: string, assignedTo: 'all' | number[]) => {
+    const updated = avatarImages.map((img) =>
+      img.id === id ? { ...img, assignedTo } : img
+    );
+    setAvatarImages(updated);
+    if (assignmentSaveTimer.current) clearTimeout(assignmentSaveTimer.current);
+    assignmentSaveTimer.current = setTimeout(
+      () => saveImagesToFirestore(updated),
+      800
+    );
   };
 
   const canCreate =
-    !!avatarImage &&
+    avatarImages.length > 0 &&
     generatedScript !== null &&
     defaultVideoPrompt.trim().length > 0;
 
-  const getImageBase64 = async (): Promise<{
-    base64: string;
-    mimeType: string;
-  }> => {
-    if (!avatarImage) throw new Error('No image');
-    if (avatarImage.file) {
+  const getEntryBase64 = (
+    entry: AvatarImageEntry
+  ): Promise<{ base64: string; mimeType: string }> => {
+    if (entry.file) {
       return new Promise((resolve, reject) => {
         const reader = new FileReader();
-        reader.readAsDataURL(avatarImage.file!);
+        reader.readAsDataURL(entry.file!);
         reader.onload = () => {
           const result = reader.result as string;
-          resolve({
-            base64: result.split(',')[1],
-            mimeType: avatarImage.file!.type,
-          });
-        };
-        reader.onerror = reject;
-      });
-    } else if (avatarImage.previewUrl) {
-      const res = await fetch(avatarImage.previewUrl);
-      const blob = await res.blob();
-      return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.readAsDataURL(blob);
-        reader.onload = () => {
-          const result = reader.result as string;
-          resolve({ base64: result.split(',')[1], mimeType: blob.type });
+          resolve({ base64: result.split(',')[1], mimeType: entry.file!.type });
         };
         reader.onerror = reject;
       });
     }
-    throw new Error('Invalid image state');
+    return fetch(entry.previewUrl)
+      .then((res) => res.blob())
+      .then(
+        (blob) =>
+          new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.readAsDataURL(blob);
+            reader.onload = () => {
+              const result = reader.result as string;
+              resolve({ base64: result.split(',')[1], mimeType: blob.type });
+            };
+            reader.onerror = reject;
+          })
+      );
+  };
+
+  const getImagesBase64ForStep = async (
+    stepNumber: number
+  ): Promise<{ base64: string; mimeType: string }[]> => {
+    const relevant = avatarImages.filter(
+      (img) =>
+        img.assignedTo === 'all' ||
+        (Array.isArray(img.assignedTo) && img.assignedTo.includes(stepNumber))
+    );
+    if (relevant.length === 0) {
+      return [];
+    }
+    return Promise.all(relevant.map(getEntryBase64));
   };
 
   const uploadToVercelBlob = async (file: Blob | File, filename: string) => {
-    const formData = new FormData();
-    formData.append('file', file);
     const res = await fetch(
       `/api/upload?filename=${encodeURIComponent(filename)}`,
       {
@@ -538,7 +748,12 @@ export default function SandboxPage() {
         body: file,
       }
     );
-    if (!res.ok) throw new Error('Failed to upload to blob');
+    if (!res.ok) {
+      const errBody = await res.json().catch(() => ({}));
+      throw new Error(
+        `Failed to upload to blob (${res.status}): ${errBody.error ?? 'unknown'}`
+      );
+    }
     const data = await res.json();
     return data.url as string;
   };
@@ -550,7 +765,7 @@ export default function SandboxPage() {
     currentSteps: StepSlot[],
     useExtendAPI: boolean
   ) => {
-    if (!sandboxId || !avatarImage) return currentSteps;
+    if (!sandboxId) return currentSteps;
 
     const providerStr = providerConfig.activeProvider;
     // We treat it as an initial generation if it's step 1 OR if extend is disabled
@@ -576,43 +791,68 @@ export default function SandboxPage() {
     );
 
     try {
-      const scriptText = generatedScript?.[stepNumber - 1]?.text || '';
-      const finalPrompt = scriptText
-        ? `${defaultVideoPrompt}. ${scriptText}`
-        : defaultVideoPrompt;
+      const scriptItem = generatedScript?.[stepNumber - 1];
+      const scriptText = scriptItem?.text?.trim() || '';
+      const clipVisualPrompt = scriptItem?.visualPrompt?.trim() || '';
+      const finalPrompt = [defaultVideoPrompt, clipVisualPrompt, scriptText]
+        .filter(Boolean)
+        .join('\n\n');
       let finalBlobUrl = '';
       let stepRefUrl = undefined;
 
       if (isInitialGeneration) {
-        const imgData = await getImageBase64();
-        const endpoint =
-          providerStr === 'vertex'
+        const imgDataArr = await getImagesBase64ForStep(stepNumber);
+        const hasImages = imgDataArr.length > 0;
+
+        const endpoint = hasImages
+          ? providerStr === 'vertex'
             ? '/api/script/generate-video/vertex/image-refs'
-            : '/api/script/generate-video/image-refs';
+            : '/api/script/generate-video/image-refs'
+          : providerStr === 'vertex'
+            ? '/api/script/generate-video/vertex/text'
+            : '/api/script/generate-video/text';
 
         console.log(
-          `[Sandbox] Step ${stepNumber}: Calling Image-Refs API (${endpoint})`
+          `[Sandbox] Step ${stepNumber}: Calling ${hasImages ? 'Image-Refs' : 'Text'} API (${endpoint})`
         );
 
-        const payload = {
-          defaultPrompt: defaultVideoPrompt,
-          clipDialogue: scriptText,
-          prompt: finalPrompt,
-          modelName: model,
-          aspectRatio,
-          resolution: videoQuality,
-          referenceImages: [
-            { data: imgData.base64, mime_type: imgData.mimeType },
-          ],
-          sandboxId,
-          runId,
-          stepNumber,
-          apiKey: providerConfig.geminiApiKey,
-          ...(providerStr === 'vertex' && {
-            vertexKey: providerConfig.vertexCredentials.serviceAccountKey,
-            vertexLocation: providerConfig.vertexCredentials.region,
-          }),
-        };
+        const payload = hasImages
+          ? {
+              defaultPrompt: defaultVideoPrompt,
+              ...(scriptText ? { clipDialogue: scriptText } : {}),
+              prompt: finalPrompt,
+              modelName: model,
+              aspectRatio,
+              resolution: videoQuality,
+              referenceImages: imgDataArr.map((d) => ({
+                data: d.base64,
+                mime_type: d.mimeType,
+              })),
+              sandboxId,
+              runId,
+              stepNumber,
+              apiKey: providerConfig.geminiApiKey,
+              ...(providerStr === 'vertex' && {
+                vertexKey: providerConfig.vertexCredentials.serviceAccountKey,
+                vertexLocation: providerConfig.vertexCredentials.region,
+              }),
+            }
+          : {
+              defaultPrompt: defaultVideoPrompt,
+              ...(scriptText ? { clipDialogue: scriptText } : {}),
+              prompt: finalPrompt,
+              modelName: model,
+              aspectRatio,
+              resolution: videoQuality,
+              sandboxId,
+              runId,
+              stepNumber,
+              apiKey: providerConfig.geminiApiKey,
+              ...(providerStr === 'vertex' && {
+                vertexKey: providerConfig.vertexCredentials.serviceAccountKey,
+                vertexLocation: providerConfig.vertexCredentials.region,
+              }),
+            };
 
         const res = await fetch(endpoint, {
           method: 'POST',
@@ -792,7 +1032,8 @@ export default function SandboxPage() {
   };
 
   const handleCreateVideos = async () => {
-    if (!avatarImage || !generatedScript || !user || !sandboxId) return;
+    if (avatarImages.length === 0 || !generatedScript || !user || !sandboxId)
+      return;
     setIsCreatingVideos(true);
 
     try {
@@ -876,24 +1117,45 @@ export default function SandboxPage() {
             .map((s) => s.videoUrl)
             .filter((url): url is string => !!url);
 
+          console.log(
+            `[Stitch:auto] videoUrls collected: ${videoUrls.length} / ${numberOfVideos}`
+          );
           if (videoUrls.length === numberOfVideos) {
+            videoUrls.forEach((u, i) =>
+              console.log(`[Stitch:auto]   clip[${i}]: ${u}`)
+            );
+            console.log(
+              `[Stitch:auto] Calling /api/sandbox/stitch for run ${runId}…`
+            );
             const stitchRes = await fetch('/api/sandbox/stitch', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
                 videoUrls,
-                filename: `stitched_${runId}.mp4`,
+                filename: `stitched_${sandboxId}_${runId}.mp4`,
               }),
             });
             if (stitchRes.ok) {
               const stitchData = await stitchRes.json();
               stitchedVideoUrl = stitchData.videoUrl;
+              console.log(
+                '[Stitch:auto] DONE — stitchedVideoUrl:',
+                stitchedVideoUrl
+              );
             } else {
-              console.error('Failed to stitch videos', await stitchRes.text());
+              const errText = await stitchRes.text();
+              console.error(
+                `[Stitch:auto] API error ${stitchRes.status}:`,
+                errText
+              );
             }
+          } else {
+            console.warn(
+              `[Stitch:auto] Skipped — only ${videoUrls.length} of ${numberOfVideos} clip URLs available`
+            );
           }
         } catch (e) {
-          console.error('Error during stitching:', e);
+          console.error('[Stitch:auto] Exception during stitching:', e);
         }
       }
 
@@ -917,6 +1179,29 @@ export default function SandboxPage() {
       alert('Failed to initialize sandbox: ' + error.message);
     } finally {
       setIsCreatingVideos(false);
+    }
+  };
+
+  const handleStopGenerating = () => {
+    isCreatingVideosRef.current = false;
+    setIsCreatingVideos(false);
+    const next = steps.map((s) => {
+      if (s.status !== 'generating') return s;
+      return s.videoUrl
+        ? { ...s, status: 'done' as const }
+        : { ...s, status: 'idle' as const };
+    });
+    setSteps(next);
+    // Persist to Firestore so the polling loop doesn't restore 'generating'
+    if (sandboxId && currentRunId) {
+      setDoc(
+        doc(
+          collection(db, 'sandbox', sandboxId, 'generatedVideos'),
+          currentRunId
+        ),
+        { steps: next, updatedAt: serverTimestamp() },
+        { merge: true }
+      ).catch(() => {});
     }
   };
 
@@ -964,7 +1249,7 @@ export default function SandboxPage() {
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
                 videoUrls,
-                filename: `stitched_${currentRunId}.mp4`,
+                filename: `stitched_${sandboxId}_${currentRunId}.mp4`,
               }),
             });
             if (stitchRes.ok) {
@@ -1058,7 +1343,7 @@ export default function SandboxPage() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             videoUrls,
-            filename: `stitched_${runId}.mp4`,
+            filename: `stitched_${sandboxId}_${runId}.mp4`,
           }),
         });
         if (stitchRes.ok) {
@@ -1100,16 +1385,16 @@ export default function SandboxPage() {
   };
 
   const handleRegeneratePrompt = async () => {
-    if (!filmDirectionSystem || !avatarImage) return;
+    if (!filmDirectionSystem || avatarImages.length === 0) return;
     setIsRegeneratingPrompt(true);
 
     try {
-      const imgData = await getImageBase64();
+      const imgDataArr = await getImagesBase64ForStep(1);
       const existingDialogues = generatedScript?.map((s) => s.text) || [];
       const selectionContext = {
         goalText: goalText.trim(),
         aspectRatio,
-        hasHumanSubject: !!avatarImage,
+        hasHumanSubject: avatarImages.length > 0,
         isUGC: true,
       };
 
@@ -1120,8 +1405,8 @@ export default function SandboxPage() {
           goalText: goalText.trim(),
           clipCount,
           commonRules: filmDirectionSystem,
-          avatarImageBase64: imgData.base64,
-          promptOnlyMode: true,
+          avatarImageBase64: imgDataArr[0]?.base64,
+          mode: 'common',
           existingDialogues,
           styles: filmDirectionSections,
           selectionContext,
@@ -1161,11 +1446,43 @@ export default function SandboxPage() {
     setIsGeneratingScript(true);
 
     try {
-      let avatarBase64: string | undefined;
-      if (avatarImage) {
+      // Build per-clip image map: for each clip 1..clipCount, which images are assigned?
+      let clipImageMap: {
+        clipId: number;
+        images: { id: string; base64: string; mimeType: string }[];
+      }[] = [];
+      let allImagesBase64: { id: string; base64: string }[] = [];
+
+      if (avatarImages.length > 0) {
         try {
-          const imgData = await getImageBase64();
-          avatarBase64 = imgData.base64;
+          const imgDataArr = await Promise.all(
+            avatarImages.map(getEntryBase64)
+          );
+          allImagesBase64 = avatarImages.map((img, i) => ({
+            id: img.id,
+            base64: imgDataArr[i].base64,
+          }));
+
+          clipImageMap = Array.from({ length: clipCount }, (_, i) => {
+            const clipId = i + 1;
+            const relevant = avatarImages.filter(
+              (img) =>
+                img.assignedTo === 'all' ||
+                (Array.isArray(img.assignedTo) &&
+                  img.assignedTo.includes(clipId))
+            );
+            return {
+              clipId,
+              images: relevant.map((img) => {
+                const data = imgDataArr[avatarImages.indexOf(img)];
+                return {
+                  id: img.id,
+                  base64: data.base64,
+                  mimeType: data.mimeType,
+                };
+              }),
+            };
+          });
         } catch (e) {
           console.warn('Could not get image base64 for script generation', e);
         }
@@ -1176,14 +1493,16 @@ export default function SandboxPage() {
         clipCount,
       };
 
-      if (filmDirectionSystem && avatarBase64) {
+      if (filmDirectionSystem && allImagesBase64.length > 0) {
         payload.commonRules = filmDirectionSystem;
-        payload.avatarImageBase64 = avatarBase64;
+        payload.avatarImages = allImagesBase64;
+        payload.avatarImageBase64 = allImagesBase64[0]?.base64;
+        payload.clipImageMap = clipImageMap;
         payload.styles = filmDirectionSections;
         payload.selectionContext = {
           goalText: goalText.trim(),
           aspectRatio,
-          hasHumanSubject: !!avatarImage,
+          hasHumanSubject: avatarImages.length > 0,
           isUGC: true,
         };
       }
@@ -1205,10 +1524,26 @@ export default function SandboxPage() {
 
       const data = await response.json();
       if (data.dialogues && Array.isArray(data.dialogues)) {
-        const newScripts = data.dialogues.map((text: string, idx: number) => ({
-          id: idx + 1,
-          text,
-        }));
+        // Merge clipPrompts into script items
+        const clipPromptsMap: Record<number, string> = {};
+        if (data.clipPrompts && Array.isArray(data.clipPrompts)) {
+          for (const cp of data.clipPrompts as {
+            clipId: number;
+            prompt: string;
+          }[]) {
+            if (cp.prompt) clipPromptsMap[cp.clipId] = cp.prompt;
+          }
+        }
+
+        const newScripts: ScriptItem[] = data.dialogues.map(
+          (text: string, idx: number) => ({
+            id: idx + 1,
+            text,
+            ...(clipPromptsMap[idx + 1]
+              ? { visualPrompt: clipPromptsMap[idx + 1] }
+              : {}),
+          })
+        );
         setGeneratedScript(newScripts);
         if (data.topicName) {
           setTopicName(data.topicName);
@@ -1218,6 +1553,7 @@ export default function SandboxPage() {
           setIsAiGeneratedPrompt(true);
           localStorage.setItem('sandbox_default_prompt', data.videoPrompt);
         }
+
         if (sandboxId) {
           await setDoc(
             doc(collection(db, 'sandbox'), sandboxId),
@@ -1245,6 +1581,112 @@ export default function SandboxPage() {
       );
     } finally {
       setIsGeneratingScript(false);
+    }
+  };
+
+  const handleRemoveClip = (clipId: number) => {
+    if (!generatedScript || generatedScript.length <= 1) return;
+    const filtered = generatedScript.filter((s) => s.id !== clipId);
+    // Re-sequence IDs 1..N
+    const resequenced = filtered.map((s, i) => ({ ...s, id: i + 1 }));
+    setGeneratedScript(resequenced);
+
+    // Remap image assignments: remove clipId, shift IDs above it down by 1
+    const remappedImages = avatarImages.map((img) => {
+      if (img.assignedTo === 'all') return img;
+      const next = (img.assignedTo as number[])
+        .filter((n) => n !== clipId)
+        .map((n) => (n > clipId ? n - 1 : n));
+      return { ...img, assignedTo: next.length > 0 ? next : ('all' as const) };
+    });
+    setAvatarImages(remappedImages);
+
+    // Update duration to match new clip count
+    const newCount = resequenced.length;
+    const newDuration = 8 + (newCount - 1) * 7;
+    setTargetDuration(newDuration);
+
+    if (sandboxId) {
+      setDoc(
+        doc(collection(db, 'sandbox'), sandboxId),
+        { scripts: resequenced, config: { clipCount: newCount } },
+        { merge: true }
+      );
+      saveImagesToFirestore(remappedImages);
+    }
+  };
+
+  const handleRegenerateClipPrompt = async (clipIndex: number) => {
+    if (!filmDirectionSystem || !generatedScript) return;
+    setRegeneratingClipPromptIndex(clipIndex);
+
+    try {
+      const script = generatedScript[clipIndex];
+      const clipId = script.id;
+
+      const imgsForClip = avatarImages.filter(
+        (img) =>
+          img.assignedTo === 'all' ||
+          (Array.isArray(img.assignedTo) && img.assignedTo.includes(clipId))
+      );
+
+      const clipImagesBase64 = await Promise.all(
+        imgsForClip.map(async (img) => {
+          const { base64, mimeType } = await getEntryBase64(img);
+          return { id: img.id, base64, mimeType };
+        })
+      );
+
+      const selectionContext = {
+        goalText: goalText.trim(),
+        aspectRatio,
+        hasHumanSubject: avatarImages.length > 0,
+        isUGC: true,
+      };
+
+      const response = await fetch('/api/sandbox/generate-scripts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mode: 'clip',
+          targetClipId: clipId,
+          avatarImages: clipImagesBase64,
+          clipDialogue: script.text,
+          goalText: goalText.trim(),
+          commonRules: filmDirectionSystem,
+          commonVideoPrompt: defaultVideoPrompt,
+          styles: filmDirectionSections,
+          selectionContext,
+        }),
+      });
+
+      if (!response.ok)
+        throw new Error(`HTTP error! status: ${response.status}`);
+      const data = await response.json();
+
+      if (data.clipPrompt !== undefined) {
+        const updated = generatedScript.map((s, i) =>
+          i === clipIndex
+            ? { ...s, visualPrompt: data.clipPrompt || undefined }
+            : s
+        );
+        setGeneratedScript(updated);
+        if (clipPromptSaveTimer.current)
+          clearTimeout(clipPromptSaveTimer.current);
+        clipPromptSaveTimer.current = setTimeout(() => {
+          if (sandboxId) {
+            setDoc(
+              doc(collection(db, 'sandbox'), sandboxId),
+              { scripts: updated },
+              { merge: true }
+            );
+          }
+        }, 800);
+      }
+    } catch (error) {
+      console.error('Failed to regenerate clip prompt:', error);
+    } finally {
+      setRegeneratingClipPromptIndex(null);
     }
   };
 
@@ -1281,23 +1723,40 @@ export default function SandboxPage() {
           </div>
           <div className="flex-1 overflow-y-auto p-2 space-y-1">
             {sandboxes.map((sandbox) => (
-              <button
+              <div
                 key={sandbox.id}
-                onClick={() => handleSelectSandbox(sandbox.id)}
                 className={cn(
-                  'w-full text-left px-3 py-2 rounded-md transition-colors text-sm',
+                  'group flex items-center gap-1 rounded-md transition-colors text-sm',
                   sandbox.id === sandboxId
-                    ? 'bg-violet-100 text-violet-900 font-medium'
+                    ? 'bg-violet-100 text-violet-900'
                     : 'text-slate-600 hover:bg-slate-100'
                 )}
               >
-                <div className="truncate font-medium">
-                  {sandbox.topicName || 'New Sandbox'}
-                </div>
-                <div className="text-[10px] text-slate-400 mt-0.5">
-                  {timeAgo(sandbox.createdAt?.toMillis?.() || Date.now())}
-                </div>
-              </button>
+                <button
+                  onClick={() => handleSelectSandbox(sandbox.id)}
+                  className="flex-1 min-w-0 text-left px-3 py-2"
+                >
+                  <div className="truncate font-medium">
+                    {sandbox.topicName || 'New Sandbox'}
+                  </div>
+                  <div className="text-[10px] text-slate-400 mt-0.5">
+                    {timeAgo(sandbox.createdAt?.toMillis?.() || Date.now())}
+                  </div>
+                </button>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setSandboxToDelete({
+                      id: sandbox.id,
+                      name: sandbox.topicName || 'New Sandbox',
+                    });
+                  }}
+                  className="opacity-0 group-hover:opacity-100 shrink-0 p-1.5 mr-1 rounded text-slate-400 hover:text-red-500 hover:bg-red-50 transition-all"
+                  title="Delete sandbox"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              </div>
             ))}
             {sandboxes.length === 0 && (
               <div className="p-4 text-center text-sm text-slate-500 whitespace-nowrap">
@@ -1374,53 +1833,155 @@ export default function SandboxPage() {
                       <div className="flex items-center gap-2">
                         <ImageIcon className="w-5 h-5 text-violet-500" />
                         <h2 className="font-semibold text-slate-800">
-                          Avatar Image
+                          Reference Images
                         </h2>
                       </div>
+                      <span className="text-xs text-slate-500">
+                        {avatarImages.length} image
+                        {avatarImages.length !== 1 ? 's' : ''}
+                      </span>
                     </div>
-                    <div className="p-4 flex-1">
-                      {!avatarImage ? (
+                    <div className="p-4 flex flex-col gap-3">
+                      {avatarImages.map((img) => (
                         <div
-                          className="border-2 border-dashed border-slate-200 rounded-xl p-8 flex flex-col items-center justify-center text-center cursor-pointer hover:border-violet-400 hover:bg-violet-50/50 transition-colors bg-slate-50/50"
-                          onClick={() => fileInputRef.current?.click()}
+                          key={img.id}
+                          data-testid="avatar-image-card"
+                          className="border border-slate-200 rounded-xl overflow-hidden bg-slate-50/50"
                         >
-                          <div className="w-12 h-12 bg-white rounded-full flex items-center justify-center shadow-sm border border-slate-100 mb-3">
-                            <Upload className="w-5 h-5 text-violet-500" />
+                          <div className="flex items-start gap-3 p-3">
+                            <div className="relative shrink-0 group/thumb">
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img
+                                src={img.previewUrl}
+                                alt="Reference"
+                                className="w-16 h-16 object-cover rounded-lg border border-slate-200 bg-slate-100 cursor-zoom-in"
+                                onClick={() =>
+                                  setLightboxIndex(avatarImages.indexOf(img))
+                                }
+                                onError={(e) => {
+                                  const el = e.currentTarget;
+                                  el.style.display = 'none';
+                                  const placeholder =
+                                    el.nextElementSibling as HTMLElement | null;
+                                  if (placeholder)
+                                    placeholder.style.display = 'flex';
+                                }}
+                              />
+                              <div
+                                className="w-16 h-16 rounded-lg border border-slate-200 bg-slate-100 items-center justify-center hidden cursor-zoom-in"
+                                onClick={() =>
+                                  setLightboxIndex(avatarImages.indexOf(img))
+                                }
+                              >
+                                <ImageIcon className="w-6 h-6 text-slate-400" />
+                              </div>
+                              <label className="absolute inset-0 flex items-center justify-center rounded-lg bg-black/40 opacity-0 group-hover/thumb:opacity-100 transition-opacity cursor-pointer">
+                                <Pencil className="w-4 h-4 text-white" />
+                                <input
+                                  type="file"
+                                  accept="image/*"
+                                  className="hidden"
+                                  onChange={(e) => {
+                                    const f = e.target.files?.[0];
+                                    if (f) replaceAvatarImage(img.id, f);
+                                    e.target.value = '';
+                                  }}
+                                />
+                              </label>
+                            </div>
+                            <div className="flex-1 min-w-0 flex flex-col gap-2">
+                              <div className="flex items-center gap-2">
+                                <button
+                                  className={cn(
+                                    'text-xs px-2.5 py-1 rounded-full border transition-colors',
+                                    img.assignedTo === 'all'
+                                      ? 'bg-violet-600 text-white border-violet-600'
+                                      : 'bg-white text-slate-600 border-slate-300 hover:border-violet-400'
+                                  )}
+                                  onClick={() =>
+                                    updateImageAssignment(img.id, 'all')
+                                  }
+                                >
+                                  All clips
+                                </button>
+                                <button
+                                  className={cn(
+                                    'text-xs px-2.5 py-1 rounded-full border transition-colors',
+                                    Array.isArray(img.assignedTo)
+                                      ? 'bg-violet-600 text-white border-violet-600'
+                                      : 'bg-white text-slate-600 border-slate-300 hover:border-violet-400'
+                                  )}
+                                  onClick={() =>
+                                    updateImageAssignment(
+                                      img.id,
+                                      Array.isArray(img.assignedTo)
+                                        ? img.assignedTo
+                                        : [1]
+                                    )
+                                  }
+                                >
+                                  Select clips
+                                </button>
+                                <button
+                                  className="ml-auto text-slate-400 hover:text-red-500 transition-colors"
+                                  onClick={() => removeAvatarImage(img.id)}
+                                >
+                                  <X className="w-4 h-4" />
+                                </button>
+                              </div>
+                              {Array.isArray(img.assignedTo) && (
+                                <div className="flex flex-wrap gap-1.5">
+                                  {Array.from(
+                                    { length: clipCount },
+                                    (_, i) => i + 1
+                                  ).map((n) => (
+                                    <button
+                                      key={n}
+                                      className={cn(
+                                        'w-7 h-7 rounded-md text-xs font-medium border transition-colors',
+                                        (img.assignedTo as number[]).includes(n)
+                                          ? 'bg-violet-600 text-white border-violet-600'
+                                          : 'bg-white text-slate-600 border-slate-300 hover:border-violet-400'
+                                      )}
+                                      onClick={() => {
+                                        const cur = img.assignedTo as number[];
+                                        const next = cur.includes(n)
+                                          ? cur.filter((x) => x !== n)
+                                          : [...cur, n].sort((a, b) => a - b);
+                                        updateImageAssignment(
+                                          img.id,
+                                          next.length === 0 ? [n] : next
+                                        );
+                                      }}
+                                    >
+                                      {n}
+                                    </button>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
                           </div>
-                          <h3 className="font-medium text-slate-800 mb-1">
-                            Upload Reference Image
-                          </h3>
-                          <p className="text-xs text-slate-500">
-                            Supports JPG, PNG (Max 5MB)
-                          </p>
-                          <input
-                            type="file"
-                            className="hidden"
-                            accept="image/*"
-                            ref={fileInputRef}
-                            onChange={handleImageUpload}
-                          />
                         </div>
-                      ) : (
-                        <div className="relative group rounded-xl overflow-hidden border border-slate-200 aspect-square max-h-[300px] w-full max-w-[300px] mx-auto">
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img
-                            src={avatarImage.previewUrl}
-                            alt="Avatar Reference"
-                            className="w-full h-full object-cover"
-                          />
-                          <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                            <Button
-                              variant="destructive"
-                              size="sm"
-                              onClick={removeImage}
-                              className="gap-1.5"
-                            >
-                              <X className="w-4 h-4" /> Remove Image
-                            </Button>
-                          </div>
-                        </div>
-                      )}
+                      ))}
+                      <div
+                        className="border-2 border-dashed border-slate-200 rounded-xl p-4 flex items-center justify-center gap-2 cursor-pointer hover:border-violet-400 hover:bg-violet-50/50 transition-colors text-slate-500 hover:text-violet-600"
+                        onClick={() => fileInputRef.current?.click()}
+                      >
+                        <Upload className="w-4 h-4" />
+                        <span className="text-sm font-medium">
+                          {avatarImages.length === 0
+                            ? 'Upload Reference Image'
+                            : 'Add Another Image'}
+                        </span>
+                        <input
+                          type="file"
+                          className="hidden"
+                          accept="image/*"
+                          multiple
+                          ref={fileInputRef}
+                          onChange={handleAddImage}
+                        />
+                      </div>
                     </div>
                   </div>
 
@@ -1453,10 +2014,31 @@ export default function SandboxPage() {
                             value={targetDuration}
                             onChange={(e) => {
                               const val = parseInt(e.target.value, 10);
+                              const newCount = 1 + Math.floor((val - 8) / 7);
                               setTargetDuration(val);
-                              updateConfigInDb({
-                                clipCount: 1 + Math.floor((val - 8) / 7),
-                              });
+                              updateConfigInDb({ clipCount: newCount });
+                              // Add empty clips if script exists and slider increased
+                              if (
+                                generatedScript &&
+                                newCount > generatedScript.length
+                              ) {
+                                const extra: ScriptItem[] = Array.from(
+                                  { length: newCount - generatedScript.length },
+                                  (_, i) => ({
+                                    id: generatedScript.length + i + 1,
+                                    text: '',
+                                  })
+                                );
+                                const updated = [...generatedScript, ...extra];
+                                setGeneratedScript(updated);
+                                if (sandboxId) {
+                                  setDoc(
+                                    doc(collection(db, 'sandbox'), sandboxId),
+                                    { scripts: updated },
+                                    { merge: true }
+                                  );
+                                }
+                              }
                             }}
                             className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-violet-600"
                           />
@@ -1536,9 +2118,22 @@ export default function SandboxPage() {
                               className="p-3 bg-slate-50 border border-slate-200 rounded-lg text-sm text-slate-600"
                             >
                               <div className="flex items-center justify-between mb-2">
-                                <span className="font-medium text-slate-800">
-                                  Clip {script.id}:
-                                </span>
+                                <div className="flex items-center gap-1.5">
+                                  <span className="font-medium text-slate-800">
+                                    Clip {script.id}:
+                                  </span>
+                                  {generatedScript.length > 1 && (
+                                    <button
+                                      className="text-slate-400 hover:text-red-500 hover:bg-red-50 rounded p-0.5 transition-colors"
+                                      title="Remove clip"
+                                      onClick={() =>
+                                        handleRemoveClip(script.id)
+                                      }
+                                    >
+                                      <X className="w-3.5 h-3.5" />
+                                    </button>
+                                  )}
+                                </div>
                                 <Button
                                   variant="ghost"
                                   size="sm"
@@ -1557,7 +2152,8 @@ export default function SandboxPage() {
                                       const selectionContext = {
                                         goalText: goalText.trim(),
                                         aspectRatio,
-                                        hasHumanSubject: !!avatarImage,
+                                        hasHumanSubject:
+                                          avatarImages.length > 0,
                                         isUGC: true,
                                       };
 
@@ -1652,6 +2248,162 @@ export default function SandboxPage() {
                                   className="min-h-[60px] resize-y text-slate-700 bg-white"
                                 />
                               )}
+
+                              {/* Per-clip visual prompt */}
+                              {(() => {
+                                const clipImgs = avatarImages.filter(
+                                  (img) =>
+                                    img.assignedTo === 'all' ||
+                                    (Array.isArray(img.assignedTo) &&
+                                      img.assignedTo.includes(script.id))
+                                );
+                                return (
+                                  <div className="mt-2 border-t border-slate-100 pt-2">
+                                    {/* Image thumbnails for this clip */}
+                                    {clipImgs.length > 0 && (
+                                      <div className="flex gap-1 mb-1.5">
+                                        {clipImgs.map((img) => (
+                                          // eslint-disable-next-line @next/next/no-img-element
+                                          <img
+                                            key={img.id}
+                                            src={img.previewUrl}
+                                            alt=""
+                                            className="w-6 h-6 rounded object-cover border border-slate-200 shrink-0"
+                                          />
+                                        ))}
+                                        <span className="text-[10px] text-slate-400 self-center ml-1">
+                                          {clipImgs.length} image
+                                          {clipImgs.length !== 1 ? 's' : ''}
+                                        </span>
+                                      </div>
+                                    )}
+                                    {/* Collapsible visual prompt row */}
+                                    <div className="flex items-center gap-1 w-full">
+                                      <div
+                                        className="flex items-center gap-1 flex-1 cursor-pointer min-w-0"
+                                        onClick={() =>
+                                          setExpandedClipPromptIndex(
+                                            expandedClipPromptIndex === index
+                                              ? null
+                                              : index
+                                          )
+                                        }
+                                      >
+                                        <ChevronRight
+                                          className={cn(
+                                            'w-3 h-3 text-slate-400 transition-transform shrink-0',
+                                            expandedClipPromptIndex === index &&
+                                              'rotate-90'
+                                          )}
+                                        />
+                                        <span className="text-xs text-slate-500 flex-1">
+                                          Visual prompt
+                                        </span>
+                                        <span
+                                          className={cn(
+                                            'text-[10px] font-medium px-1.5 py-0.5 rounded-full shrink-0',
+                                            script.visualPrompt
+                                              ? 'bg-violet-100 text-violet-700'
+                                              : 'bg-slate-100 text-slate-400'
+                                          )}
+                                        >
+                                          {script.visualPrompt
+                                            ? 'Custom'
+                                            : clipImgs.length > 0
+                                              ? 'Auto'
+                                              : 'None'}
+                                        </span>
+                                      </div>
+                                      {regeneratingClipPromptIndex === index ? (
+                                        <div className="w-3 h-3 rounded-full border-2 border-violet-500 border-t-transparent animate-spin shrink-0 ml-1" />
+                                      ) : clipImgs.length > 0 ? (
+                                        <button
+                                          className="ml-1 text-slate-400 hover:text-violet-600 transition-colors shrink-0"
+                                          title="Regenerate visual prompt for this clip"
+                                          onClick={() =>
+                                            handleRegenerateClipPrompt(index)
+                                          }
+                                        >
+                                          <RotateCcw className="w-3 h-3" />
+                                        </button>
+                                      ) : null}
+                                    </div>
+                                    {expandedClipPromptIndex === index && (
+                                      <div className="mt-1.5 flex flex-col gap-1.5">
+                                        <Textarea
+                                          value={script.visualPrompt ?? ''}
+                                          placeholder={
+                                            clipImgs.length > 0
+                                              ? 'Scene-specific visual details for this clip…'
+                                              : 'No images assigned — type a custom visual note…'
+                                          }
+                                          className="min-h-[48px] resize-y text-xs text-slate-700 bg-white"
+                                          onChange={(e) => {
+                                            const val = e.target.value;
+                                            const newScripts =
+                                              generatedScript.map((s, i) =>
+                                                i === index
+                                                  ? {
+                                                      ...s,
+                                                      visualPrompt:
+                                                        val || undefined,
+                                                    }
+                                                  : s
+                                              );
+                                            setGeneratedScript(newScripts);
+                                            if (clipPromptSaveTimer.current)
+                                              clearTimeout(
+                                                clipPromptSaveTimer.current
+                                              );
+                                            clipPromptSaveTimer.current =
+                                              setTimeout(() => {
+                                                if (sandboxId) {
+                                                  setDoc(
+                                                    doc(
+                                                      collection(db, 'sandbox'),
+                                                      sandboxId
+                                                    ),
+                                                    { scripts: newScripts },
+                                                    { merge: true }
+                                                  );
+                                                }
+                                              }, 800);
+                                          }}
+                                        />
+                                        {script.visualPrompt && (
+                                          <button
+                                            className="self-end text-xs text-slate-400 hover:text-red-500 transition-colors"
+                                            onClick={() => {
+                                              const newScripts =
+                                                generatedScript.map((s, i) =>
+                                                  i === index
+                                                    ? {
+                                                        ...s,
+                                                        visualPrompt: undefined,
+                                                      }
+                                                    : s
+                                                );
+                                              setGeneratedScript(newScripts);
+                                              if (sandboxId) {
+                                                setDoc(
+                                                  doc(
+                                                    collection(db, 'sandbox'),
+                                                    sandboxId
+                                                  ),
+                                                  { scripts: newScripts },
+                                                  { merge: true }
+                                                );
+                                              }
+                                            }}
+                                          >
+                                            Reset
+                                          </button>
+                                        )}
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })()}
                             </div>
                           ))}
                         </div>
@@ -1666,7 +2418,7 @@ export default function SandboxPage() {
                                 </span>
                               )}
                             </Label>
-                            {filmDirectionSystem && avatarImage && (
+                            {filmDirectionSystem && avatarImages.length > 0 && (
                               <Button
                                 variant="ghost"
                                 size="sm"
@@ -2002,7 +2754,108 @@ export default function SandboxPage() {
                       finalVideoUrl = lastDoneStep?.videoUrl || '';
                     }
 
-                    if (!finalVideoUrl) return null;
+                    if (!finalVideoUrl) {
+                      // Show a generate button when all clips are done but stitch is missing
+                      const needsStitch =
+                        steps.length > 1 &&
+                        (!activeRun || activeRun.isExtendEnabled === false) &&
+                        !activeRun?.stitchedVideoUrl;
+                      if (!needsStitch) return null;
+                      return (
+                        <div className="mb-6 bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden p-4">
+                          <div className="flex items-center justify-between">
+                            <h3 className="font-semibold text-slate-800">
+                              Final Complete Video
+                            </h3>
+                            <Button
+                              variant="default"
+                              size="sm"
+                              disabled={isCreatingVideos}
+                              onClick={async () => {
+                                if (!currentRunId) return;
+                                setIsCreatingVideos(true);
+                                try {
+                                  const videoUrls = steps
+                                    .map((s) => s.videoUrl)
+                                    .filter((url): url is string => !!url);
+                                  console.log(
+                                    `[GenerateFullClip] Clicked — ${videoUrls.length} clip(s) to stitch for ${currentRunId}`
+                                  );
+                                  if (videoUrls.length < 2) {
+                                    console.warn(
+                                      '[GenerateFullClip] Not enough clip URLs, aborting'
+                                    );
+                                    return;
+                                  }
+                                  videoUrls.forEach((u, i) =>
+                                    console.log(
+                                      `[GenerateFullClip]   clip[${i}]: ${u}`
+                                    )
+                                  );
+                                  console.log(
+                                    '[GenerateFullClip] Calling /api/sandbox/stitch…'
+                                  );
+                                  const stitchRes = await fetch(
+                                    '/api/sandbox/stitch',
+                                    {
+                                      method: 'POST',
+                                      headers: {
+                                        'Content-Type': 'application/json',
+                                      },
+                                      body: JSON.stringify({
+                                        videoUrls,
+                                        filename: `stitched_${sandboxId}_${currentRunId}.mp4`,
+                                      }),
+                                    }
+                                  );
+                                  if (stitchRes.ok) {
+                                    const stitchData = await stitchRes.json();
+                                    console.log(
+                                      '[GenerateFullClip] Stitch succeeded — URL:',
+                                      stitchData.videoUrl
+                                    );
+                                    await setDoc(
+                                      doc(
+                                        collection(
+                                          db,
+                                          'sandbox',
+                                          sandboxId!,
+                                          'generatedVideos'
+                                        ),
+                                        currentRunId
+                                      ),
+                                      { stitchedVideoUrl: stitchData.videoUrl },
+                                      { merge: true }
+                                    );
+                                    await loadRunsForSandbox(sandboxId!);
+                                    console.log(
+                                      '[GenerateFullClip] DONE — Firestore updated'
+                                    );
+                                  } else {
+                                    const errText = await stitchRes.text();
+                                    console.error(
+                                      `[GenerateFullClip] Stitch API error ${stitchRes.status}:`,
+                                      errText
+                                    );
+                                  }
+                                } catch (e) {
+                                  console.error(
+                                    '[GenerateFullClip] Failed to fetch:',
+                                    e
+                                  );
+                                } finally {
+                                  setIsCreatingVideos(false);
+                                }
+                              }}
+                            >
+                              {isCreatingVideos
+                                ? 'Stitching…'
+                                : 'Generate Full Clip'}
+                            </Button>
+                          </div>
+                        </div>
+                      );
+                    }
 
                     return (
                       <div className="mb-6 bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden p-4">
@@ -2036,7 +2889,7 @@ export default function SandboxPage() {
                                           },
                                           body: JSON.stringify({
                                             videoUrls,
-                                            filename: `stitched_${currentRunId}.mp4`,
+                                            filename: `stitched_${sandboxId}_${currentRunId}.mp4`,
                                           }),
                                         }
                                       );
@@ -2055,9 +2908,9 @@ export default function SandboxPage() {
                                             collection(
                                               db,
                                               'sandbox',
-                                              sandboxId!
+                                              sandboxId!,
+                                              'generatedVideos'
                                             ),
-                                            'generatedVideos',
                                             currentRunId
                                           ),
                                           { stitchedVideoUrl: newStitchedUrl },
@@ -2097,52 +2950,66 @@ export default function SandboxPage() {
                         />
                         <div className="mt-4 flex justify-end gap-3">
                           <button
+                            disabled={
+                              isCreatingVideos || isDownloadingFinalAudio
+                            }
                             onClick={async () => {
+                              setIsDownloadingFinalAudio(true);
+                              setFfmpegProgress(null);
+                              console.log(
+                                '[DownloadAudio] Clicked — extracting audio client-side from:',
+                                finalVideoUrl
+                              );
                               try {
-                                const videoUrls = steps
-                                  .map((s) => s.videoUrl)
-                                  .filter((url): url is string => !!url);
-                                if (videoUrls.length === 0) return;
-                                const res = await fetch('/api/sandbox/stitch', {
-                                  method: 'POST',
-                                  headers: {
-                                    'Content-Type': 'application/json',
-                                  },
-                                  body: JSON.stringify({
-                                    videoUrls,
-                                    filename: `stitched_${currentRunId}.mp4`,
-                                    extractAudio: true,
-                                  }),
-                                });
-                                if (res.ok) {
-                                  const data = await res.json();
-                                  if (data.audioUrl) {
-                                    const fetchRes = await fetch(data.audioUrl);
-                                    const blob = await fetchRes.blob();
-                                    const blobUrl =
-                                      window.URL.createObjectURL(blob);
-                                    const a = document.createElement('a');
-                                    a.href = blobUrl;
-                                    a.download = `${topicName || 'complete-audio'}-${Date.now()}.mp3`;
-                                    document.body.appendChild(a);
-                                    a.click();
-                                    window.URL.revokeObjectURL(blobUrl);
-                                    document.body.removeChild(a);
+                                const blob = await extractAudioLocally(
+                                  finalVideoUrl,
+                                  (msg) => {
+                                    console.log('[DownloadAudio]', msg);
+                                    setFfmpegProgress(msg);
                                   }
-                                }
+                                );
+                                console.log(
+                                  `[DownloadAudio] Done — ${(blob.size / 1024 / 1024).toFixed(2)} MB — triggering download`
+                                );
+                                const blobUrl =
+                                  window.URL.createObjectURL(blob);
+                                const a = document.createElement('a');
+                                a.href = blobUrl;
+                                a.download = `${topicName || 'complete-audio'}-${Date.now()}.mp3`;
+                                document.body.appendChild(a);
+                                a.click();
+                                window.URL.revokeObjectURL(blobUrl);
+                                document.body.removeChild(a);
                               } catch (err) {
-                                console.error('Audio download failed', err);
+                                console.error('[DownloadAudio] Failed:', err);
+                              } finally {
+                                setIsDownloadingFinalAudio(false);
+                                setFfmpegProgress(null);
                               }
                             }}
-                            className="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors h-9 px-4 gap-2 text-violet-700 bg-violet-100 hover:bg-violet-200 shadow-sm"
+                            className={`inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors h-9 px-4 gap-2 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed ${isDownloadingFinalAudio ? 'text-white bg-violet-500 cursor-not-allowed' : 'text-violet-700 bg-violet-100 hover:bg-violet-200'}`}
                           >
-                            <Download className="w-4 h-4" /> Download Audio
+                            <Download className="w-4 h-4" />
+                            {isDownloadingFinalAudio
+                              ? (ffmpegProgress ?? 'Extracting…')
+                              : 'Download Audio'}
                           </button>
                           <button
+                            disabled={isCreatingVideos}
                             onClick={async () => {
+                              console.log(
+                                '[DownloadVideo] Clicked — downloading from:',
+                                finalVideoUrl
+                              );
                               try {
+                                console.log(
+                                  '[DownloadVideo] Fetching video blob…'
+                                );
                                 const res = await fetch(finalVideoUrl);
                                 const blob = await res.blob();
+                                console.log(
+                                  `[DownloadVideo] Blob received: ${(blob.size / 1024 / 1024).toFixed(2)} MB — triggering download`
+                                );
                                 const url = window.URL.createObjectURL(blob);
                                 const a = document.createElement('a');
                                 a.href = url;
@@ -2151,11 +3018,12 @@ export default function SandboxPage() {
                                 a.click();
                                 window.URL.revokeObjectURL(url);
                                 document.body.removeChild(a);
+                                console.log('[DownloadVideo] DONE');
                               } catch (err) {
-                                console.error('Download failed', err);
+                                console.error('[DownloadVideo] Failed:', err);
                               }
                             }}
-                            className="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors h-9 px-4 gap-2 text-white bg-violet-600 hover:bg-violet-700 shadow-sm"
+                            className="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors h-9 px-4 gap-2 text-white bg-violet-600 hover:bg-violet-700 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
                           >
                             <Download className="w-4 h-4" /> Download Complete
                             Video
@@ -2175,10 +3043,19 @@ export default function SandboxPage() {
                             : 'Current Run'}
                         </span>
                         {isCreatingVideos && (
-                          <span className="text-xs font-medium text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full flex items-center gap-1">
-                            <div className="w-3 h-3 border-2 border-amber-500 border-t-transparent rounded-full animate-spin" />
-                            Generating
-                          </span>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs font-medium text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full flex items-center gap-1">
+                              <div className="w-3 h-3 border-2 border-amber-500 border-t-transparent rounded-full animate-spin" />
+                              Generating
+                            </span>
+                            <button
+                              onClick={handleStopGenerating}
+                              className="text-xs font-medium text-red-600 bg-red-50 hover:bg-red-100 px-2 py-0.5 rounded-full flex items-center gap-1 transition-colors"
+                            >
+                              <Square className="w-3 h-3 fill-red-600" />
+                              Stop
+                            </button>
+                          </div>
                         )}
                       </div>
 
@@ -2329,11 +3206,18 @@ export default function SandboxPage() {
                               </div>
                             )}
                             {step.status === 'generating' && (
-                              <div className="aspect-video bg-slate-100 rounded-lg flex flex-col items-center justify-center gap-3">
+                              <div className="aspect-video bg-slate-100 rounded-lg flex flex-col items-center justify-center gap-3 relative">
                                 <div className="w-8 h-8 rounded-full border-4 border-violet-200 border-t-violet-600 animate-spin" />
                                 <span className="text-sm font-medium text-slate-500">
                                   Generating video...
                                 </span>
+                                <button
+                                  onClick={handleStopGenerating}
+                                  className="absolute top-2 right-2 text-xs font-medium text-red-500 hover:text-red-700 bg-white border border-red-200 hover:border-red-400 px-2 py-1 rounded-full flex items-center gap-1 transition-colors"
+                                >
+                                  <Square className="w-3 h-3 fill-red-500" />
+                                  Stop
+                                </button>
                               </div>
                             )}
                             {step.status === 'done' && step.videoUrl && (
@@ -2356,9 +3240,63 @@ export default function SandboxPage() {
                                     </a>
                                   </div>
                                 )}
-                                {idx === steps.length - 1 &&
-                                  isExtendEnabled && (
-                                    <div className="mt-3 flex items-center justify-end">
+                                <div className="mt-3 flex items-center justify-end gap-2">
+                                  <button
+                                    onClick={async (e) => {
+                                      const btn = e.currentTarget;
+                                      btn.disabled = true;
+                                      btn.textContent = 'Extracting…';
+                                      try {
+                                        const res = await fetch(
+                                          '/api/sandbox/stitch',
+                                          {
+                                            method: 'POST',
+                                            headers: {
+                                              'Content-Type':
+                                                'application/json',
+                                            },
+                                            body: JSON.stringify({
+                                              videoUrls: [step.videoUrl],
+                                              filename: `clip_${step.stepNumber}_audio_${Date.now()}.mp3`,
+                                              extractAudio: true,
+                                            }),
+                                          }
+                                        );
+                                        const data = await res.json();
+                                        if (data.audioUrl) {
+                                          const audioRes = await fetch(
+                                            data.audioUrl
+                                          );
+                                          const audioBlob =
+                                            await audioRes.blob();
+                                          const blobUrl =
+                                            window.URL.createObjectURL(
+                                              audioBlob
+                                            );
+                                          const a = document.createElement('a');
+                                          a.href = blobUrl;
+                                          a.download = `${topicName || 'clip'}-step${step.stepNumber}.mp3`;
+                                          document.body.appendChild(a);
+                                          a.click();
+                                          window.URL.revokeObjectURL(blobUrl);
+                                          document.body.removeChild(a);
+                                        }
+                                      } catch (err) {
+                                        console.error(
+                                          'Audio extract failed',
+                                          err
+                                        );
+                                      } finally {
+                                        btn.disabled = false;
+                                        btn.textContent = 'Download Audio';
+                                      }
+                                    }}
+                                    className="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors h-8 px-3 gap-1.5 text-slate-700 bg-slate-100 hover:bg-slate-200"
+                                  >
+                                    Download Audio
+                                  </button>
+                                  {idx === steps.length - 1 &&
+                                    isExtendEnabled && (
                                       <a
                                         href={step.videoUrl}
                                         download
@@ -2366,8 +3304,8 @@ export default function SandboxPage() {
                                       >
                                         Download Output
                                       </a>
-                                    </div>
-                                  )}
+                                    )}
+                                </div>
                               </div>
                             )}
                             {step.status === 'error' && (
@@ -2536,7 +3474,7 @@ export default function SandboxPage() {
                                                                   body: JSON.stringify(
                                                                     {
                                                                       videoUrls,
-                                                                      filename: `stitched_${run.id}.mp4`,
+                                                                      filename: `stitched_${sandboxId}_${run.id}.mp4`,
                                                                     }
                                                                   ),
                                                                 }
@@ -2632,7 +3570,7 @@ export default function SandboxPage() {
                                                           },
                                                           body: JSON.stringify({
                                                             videoUrls,
-                                                            filename: `stitched_${run.id}.mp4`,
+                                                            filename: `stitched_${sandboxId}_${run.id}.mp4`,
                                                             extractAudio: true,
                                                           }),
                                                         }
@@ -2827,6 +3765,97 @@ export default function SandboxPage() {
         </div>
       </div>
       <ProviderBadge hideBadge />
+
+      {/* Image lightbox */}
+      {lightboxIndex !== null && avatarImages[lightboxIndex] && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80"
+          onClick={() => setLightboxIndex(null)}
+        >
+          <button
+            className="absolute top-4 right-4 text-white/70 hover:text-white transition-colors"
+            onClick={() => setLightboxIndex(null)}
+          >
+            <X className="w-6 h-6" />
+          </button>
+
+          {/* Left arrow */}
+          {avatarImages.length > 1 && (
+            <button
+              className="absolute left-4 text-white/70 hover:text-white transition-colors p-2"
+              onClick={(e) => {
+                e.stopPropagation();
+                setLightboxIndex(
+                  (lightboxIndex - 1 + avatarImages.length) %
+                    avatarImages.length
+                );
+              }}
+            >
+              <ChevronDown className="w-8 h-8 rotate-90" />
+            </button>
+          )}
+
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={avatarImages[lightboxIndex].previewUrl}
+            alt="Reference full"
+            className="max-h-[85vh] max-w-[85vw] object-contain rounded-xl shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          />
+
+          {/* Right arrow */}
+          {avatarImages.length > 1 && (
+            <button
+              className="absolute right-4 text-white/70 hover:text-white transition-colors p-2"
+              onClick={(e) => {
+                e.stopPropagation();
+                setLightboxIndex((lightboxIndex + 1) % avatarImages.length);
+              }}
+            >
+              <ChevronDown className="w-8 h-8 -rotate-90" />
+            </button>
+          )}
+
+          {/* Counter */}
+          <span className="absolute bottom-4 text-white/60 text-sm">
+            {lightboxIndex + 1} / {avatarImages.length}
+          </span>
+        </div>
+      )}
+
+      {/* Delete sandbox confirmation */}
+      <Dialog
+        open={!!sandboxToDelete}
+        onOpenChange={(open) => {
+          if (!open) setSandboxToDelete(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete Sandbox</DialogTitle>
+            <DialogDescription>
+              Are you sure you want to delete{' '}
+              <strong>{sandboxToDelete?.name}</strong>? This cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setSandboxToDelete(null)}
+              disabled={isDeletingSandbox}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={handleDeleteSandbox}
+              disabled={isDeletingSandbox}
+            >
+              {isDeletingSandbox ? 'Deleting…' : 'Delete'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -50,7 +50,7 @@ export async function POST(req: NextRequest) {
     }));
 
     const NEGATIVE_PROMPT =
-      'slow speech, long pauses, continued talking after dialogue ends, extra lip movement, mumbling';
+      'slow speech, long pauses, continued talking after dialogue ends, extra lip movement, mumbling, background music, music soundtrack, ambient music';
 
     const enhancedPrompt = `${finalPrompt}\n\n${VEO_HARDCODED_INJECTIONS}`;
 

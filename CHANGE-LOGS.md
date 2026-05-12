@@ -1,3 +1,335 @@
+## 🗓️ **2026-05-12** (latest)
+
+---
+
+### ✨ Features
+
+---
+
+> ### Client-Side Audio Extraction via ffmpeg.wasm
+>
+> - **What changed:** The **Download Audio** button on the Final Complete Video now extracts audio entirely in the browser using `@ffmpeg/ffmpeg` (WASM, single-threaded). No server round-trip occurs — FFmpeg runs locally, fetches the stitched video URL, strips audio to MP3, and triggers a browser download. Live progress messages (`Loading FFmpeg…`, `Fetching video…`, `Extracting audio…`) are displayed inside the button while running. WASM binaries (`ffmpeg-core.js` / `ffmpeg-core.wasm`) are served from `/public/ffmpeg/` so they load without internet after the first page visit.
+> - **Why:** The previous flow sent the stitched URL to the server, re-downloaded the file server-side, ran FFmpeg there, then streamed the result back — an extra full-file transfer. Client-side extraction is zero extra bandwidth: the browser already has the video URL and produces the MP3 locally.
+> - **Files:**
+>   - `src/lib/client-ffmpeg.ts` (new)
+>   - `src/app/sandbox/page.tsx`
+>   - `public/ffmpeg/ffmpeg-core.js`
+>   - `public/ffmpeg/ffmpeg-core.wasm`
+
+---
+
+> ### Stitch + Download Logging
+>
+> - **What changed:** Console logs added at every step of the full-clip pipeline. Server-side (`[Stitch {ts}]`): logs clip count, each URL, FFmpeg start/finish with elapsed time, Blob upload duration, and final URL. Client-side tags: `[Stitch:auto]` (auto-stitch after generation — also logs skip reason if URLs are missing), `[GenerateFullClip]` (manual button), `[DownloadAudio]` (final-clip audio), `[DownloadVideo]` (final-clip video). All error paths log status code and body text.
+> - **Why:** No visibility into why the stitch was slow, skipped, or failing silently.
+> - **Files:**
+>   - `src/app/api/sandbox/stitch/route.ts`
+>   - `src/app/sandbox/page.tsx`
+
+---
+
+> ### Stitch Route: FFmpeg Reads URLs Directly (No Node.js Download)
+>
+> - **What changed:** The stitch route no longer downloads clip files in Node.js before passing them to FFmpeg. FFmpeg now reads from the Vercel Blob HTTP URLs directly using `-protocol_whitelist file,http,https,tcp,tls`. This eliminates the download loop (sequential or parallel) and the associated temp files per clip.
+> - **Why:** Downloading clips in Node.js then passing them to FFmpeg was redundant — FFmpeg can fetch HTTP sources natively. Fewer disk writes, less code, same result.
+> - **Files:**
+>   - `src/app/api/sandbox/stitch/route.ts`
+
+---
+
+> ### Stitch Route: `stream` Mode — Skip Blob Upload, Return Binary Directly
+>
+> - **What changed:** The stitch API now accepts `stream: true` in the request body. When set, the stitched/extracted file is read into memory and returned as a binary HTTP response (`Content-Type: video/mp4` or `audio/mpeg`) instead of being uploaded to Vercel Blob. The client receives the file directly and triggers a browser download from the response blob.
+> - **Why:** On slow connections the old flow wasted bandwidth: server uploads stitched file to Blob, then client re-downloads from Blob. Streaming cuts that to one transfer.
+> - **Files:**
+>   - `src/app/api/sandbox/stitch/route.ts`
+>   - `src/app/sandbox/page.tsx`
+
+---
+
+> ### Download Audio Uses Stitched Video URL (Not All Clip URLs)
+>
+> - **What changed:** The **Download Audio** button on the Final Complete Video now sends only the single `stitchedVideoUrl` to the stitch API instead of all N individual clip URLs. Audio is extracted from the already-combined file. Also switched to `stream: true` so no Blob upload/re-download occurs.
+> - **Why:** Previously it re-downloaded all N clips and re-stitched from scratch just to extract audio, wasting significant bandwidth on every audio download click.
+> - **Files:**
+>   - `src/app/sandbox/page.tsx`
+
+---
+
+> ### Multiple Reference Images with Per-Clip Assignment
+>
+> - **What changed:** The sandbox now supports multiple reference images instead of a single avatar image. Each image gets a UUID and can be assigned to `'all'` clips or a specific subset of clip numbers via a toggle UI. Images are uploaded to Vercel Blob under per-image paths (`sandbox/{id}/avatar_{uuid}.{ext}`) and persisted to Firestore as a `referenceImages[]` array. On session restore, the full array (including `assignedTo` state) is rehydrated.
+> - **Why:** A single reference image forced the same visual context on every clip. Per-clip image assignment lets each clip pull from its own set of reference photos for scene-specific Veo prompting.
+> - **Files:**
+>   - `src/app/sandbox/page.tsx`
+>   - `src/app/api/upload/route.ts`
+
+---
+
+> ### Per-Clip Visual Prompts (Script Generation)
+>
+> - **What changed:** The script generation API (`/api/sandbox/generate-scripts`) now has three modes: `'all'` (full generation — outputs `dialogues`, `commonVideoPrompt`, and `clipPrompts[]`), `'common'` (prompt-only, legacy path), and `'clip'` (regenerate just one clip's visual prompt from its assigned images). The LLM synthesises per-clip scene context from whichever images are assigned to that clip. `commonVideoPrompt` is now separated from `clipPrompts` so persona/audio rules aren't repeated per clip. VEO injections are extracted into a shared `appendVeoInjections()` helper. The sandbox UI shows an inline editable clip-prompt section under each script item, with a **Regenerate** button and a **Reset** to clear overrides.
+> - **Why:** A single shared video prompt produced inconsistent scene transitions between clips. Per-clip prompts let Veo render each clip's scene independently while sharing the same persona and style baseline.
+> - **Files:**
+>   - `src/app/api/sandbox/generate-scripts/route.ts`
+>   - `src/app/sandbox/page.tsx`
+
+---
+
+> ### Image Lightbox Viewer
+>
+> - **What changed:** Clicking any reference image thumbnail opens a fullscreen lightbox overlay. Left/right arrow buttons navigate between images; clicking outside or the ✕ button closes it. A counter badge shows the current position (`n / total`).
+> - **Why:** Thumbnails were too small to verify image quality or composition details.
+> - **Files:**
+>   - `src/app/sandbox/page.tsx`
+
+---
+
+> ### Delete Sandbox
+>
+> - **What changed:** A trash icon on each sandbox card in the sidebar now opens a confirmation dialog before permanently deleting that sandbox's Firestore document. If the deleted sandbox is the currently active one, all local state is reset.
+> - **Why:** There was no way to remove sandboxes that were created by mistake or no longer needed.
+> - **Files:**
+>   - `src/app/sandbox/page.tsx`
+
+---
+
+### 🐛 Fixes
+
+---
+
+> ### Gemini Image SDK Migration (`@google/genai`)
+>
+> - **What changed:** `gemini-image.ts` was migrated from the deprecated `GoogleGenerativeAI` client (`@google/generative-ai`) to the new `GoogleGenAI` client (`@google/genai`). The API call is now `ai.models.generateContent(...)` with `config.responseModalities: ['TEXT', 'IMAGE']`, and response parsing uses the new candidate structure.
+> - **Why:** The old SDK threw at runtime after the model was updated; the new SDK is the supported path for multimodal generation.
+> - **Files:**
+>   - `src/services/gemini-image.ts`
+
+---
+
+> ### Firebase Auth `localStorage` Persistence for Playwright
+>
+> - **What changed:** `firebase.ts` now calls `setPersistence(auth, browserLocalPersistence)` on the client side. This writes the auth session to `localStorage` so Playwright's `storageState` mechanism can capture and replay it in E2E tests.
+> - **Why:** Auth sessions stored only in memory were invisible to `storageState`, forcing tests to log in on every run.
+> - **Files:**
+>   - `src/lib/firebase.ts`
+
+---
+
+> ### Next.js Image Remote Patterns for Vercel Blob
+>
+> - **What changed:** Added `*.vercel-storage.com` and `*.public.blob.vercel-storage.com` to `remotePatterns` in `next.config.ts` so `<Image>` components can render Vercel Blob URLs without throwing.
+> - **Why:** Next.js blocks external `<Image>` sources by default; Blob-hosted reference images were causing runtime errors.
+> - **Files:**
+>   - `next.config.ts`
+
+---
+
+> ### Upload Error Message Now Surfaces Server Detail
+>
+> - **What changed:** `uploadToVercelBlob` in the sandbox page now reads the server's JSON error body before throwing, so the console error includes the actual message (e.g. `BlobAccessError: No token found`) instead of the opaque `"Failed to upload to blob"`.
+> - **Why:** The generic message made it impossible to distinguish a missing `BLOB_READ_WRITE_TOKEN` from a network failure or any other server-side error.
+> - **Files:**
+>   - `src/app/sandbox/page.tsx`
+
+---
+
+> ### Download Audio Loading State on Final Clip
+>
+> - **What changed:** The **Download Audio** button on the Final Complete Video now turns solid violet and shows "Extracting…" while the audio is being processed, then reverts when done. Both **Download Audio** and **Download Complete Video** are disabled (50% opacity) while `isCreatingVideos` is true — i.e. while a stitch or generation is still in progress.
+> - **Why:** There was no visual feedback that the audio extraction was running, and nothing preventing a second click mid-extraction.
+> - **Files:**
+>   - `src/app/sandbox/page.tsx`
+
+---
+
+> ### "Generate Full Clip" Button When Stitch Is Missing
+>
+> - **What changed:** When all clips are done but no stitched video exists (extend mode off), the Final Complete Video section now shows a **Generate Full Clip** button instead of rendering nothing. Clicking it calls `/api/sandbox/stitch`, saves `stitchedVideoUrl` to Firestore, and refreshes the run list.
+> - **Why:** If the automatic stitch was skipped or failed, there was no way to trigger it without re-generating all clips.
+> - **Files:**
+>   - `src/app/sandbox/page.tsx`
+
+---
+
+> ### Polling Interval Now Stitches When All Clips Complete
+>
+> - **What changed:** The 5-second polling interval that watches the current run now triggers stitching when it detects all steps are done, `isExtendEnabled === false`, no `stitchedVideoUrl` exists yet, and `handleCreateVideos` is not already running (`isCreatingVideosRef.current === false`). Previously it only wrote `status: 'done'`, leaving the run without a stitched video.
+> - **Why:** A race between the SandboxUpdater writing all steps to Firestore and `handleCreateVideos` reaching the stitch block could cause the poll to mark the run done first, silently skipping the stitch.
+> - **Files:**
+>   - `src/app/sandbox/page.tsx`
+
+---
+
+> ### Stitched Video Blob Path Scoped to Sandbox
+>
+> - **What changed:** All stitch calls now use `stitched_{sandboxId}_{runId}.mp4` as the blob filename instead of `stitched_{runId}.mp4`. Applies to the main generation flow, retry flow, polling recovery, "Generate Full Clip" button, "Recreate Video" button, and the run history re-stitch path.
+> - **Why:** `runId` values (`run_1`, `run_2`, …) are not globally unique — two different sandboxes both have a `run_1`, so their stitched videos wrote to the same Vercel Blob path and overwrote each other. This caused the Final Complete Video of one sandbox to display a clip belonging to a completely different sandbox.
+> - **Files:**
+>   - `src/app/sandbox/page.tsx`
+
+---
+
+## 🗓️ **2026-05-11**
+
+---
+
+### ✨ Features
+
+---
+
+> ### Download Audio on Individual Clip Cards
+>
+> - **What changed:** Each clip card that has a completed video now shows a **Download Audio** button below the player. Clicking it calls `/api/sandbox/stitch` with `extractAudio: true` for that single clip, shows an "Extracting…" disabled state while processing, then auto-downloads the resulting `.mp3` named after the topic and step number.
+> - **Why:** Users needed to extract audio per-clip (e.g. for voiceover review or re-use) without downloading the full stitched video.
+> - **Files:**
+>   - `src/app/sandbox/page.tsx`
+
+---
+
+### 🐛 Fixes
+
+---
+
+> ### Final Clip Truncated in Stitched Download
+>
+> - **What changed:** Added `-fflags +genpts` to the FFmpeg concat command in the stitch API. Also fixed an invalid Firestore collection reference (`collection(db, 'sandbox', sandboxId)` → 2 segments, always threw) in the manual "Recreate Video" button, which was preventing the new stitched URL from being saved and causing the download to use a stale (shorter) video.
+> - **Why:** Veo output clips can have discontinuous presentation timestamps; without `+genpts` FFmpeg drops the tail of the last segment. The Firestore bug meant re-stitching never persisted, so the download button kept using the first-ever stitched file.
+> - **Files:**
+>   - `src/app/api/sandbox/stitch/route.ts`
+>   - `src/app/sandbox/page.tsx`
+
+---
+
+## 🗓️ **2026-05-11**
+
+---
+
+### ✨ Features
+
+---
+
+> ### Replace Image Without Changing Settings
+>
+> - **What changed:** Each reference image card now has a pencil-icon overlay that appears on hover over the thumbnail. Clicking it opens a file picker; selecting a new file replaces only the image (`file`, `previewUrl`, `blobUrl`) while keeping `id`, `assignedTo`, and all other settings unchanged. The Vercel Blob upload route was also updated with `allowOverwrite: true` so re-uploading to the same path succeeds.
+> - **Why:** Users needed to swap out an image mid-session without losing clip assignments.
+> - **Files:**
+>   - `src/app/sandbox/page.tsx`
+>   - `src/app/api/upload/route.ts`
+
+---
+
+> ### Stop Button on Generating Video Clips
+>
+> - **What changed:** A red **Stop** button now appears in the top-right corner of any clip currently showing the "Generating video…" spinner. Clicking it immediately halts the sequential generation chain (`isCreatingVideosRef.current = false`), writes the corrected step statuses to Firestore (so the polling loop doesn't restore `'generating'`), and recovers the step to `'done'` if a `videoUrl` already exists — avoiding a new API call. A global Stop badge also appears next to the "Generating" indicator in the run header.
+> - **Why:** There was no way to cancel in-progress generation or recover a step stuck in `'generating'` due to a race condition, without triggering a new (paid) API call.
+> - **Files:**
+>   - `src/app/sandbox/page.tsx`
+
+---
+
+### 🐛 Fixes
+
+---
+
+> ### `personGeneration: ALLOW_ALL` for Vertex AI VEO
+>
+> - **What changed:** `PersonGeneration.ALLOW_ALL` (the correct SDK enum value, not the lowercase string `'allow_all'`) is now set in `buildConfig` in the Vertex AI service, covering all generation modes. The `personGeneration` field was removed from the Gemini service — the `@google/genai` SDK throws if it is present on non-Vertex calls.
+> - **Why:** Vertex AI was rejecting requests with error code 17301594 ("content blocked by safety settings for person/face generation"). The previous fix used the wrong case (`'allow_all'` instead of `'ALLOW_ALL'`).
+> - **Files:**
+>   - `src/services/vertex-video.ts`
+>   - `src/services/gemini-video.ts`
+
+---
+
+> ### Concurrent Step Completion Race Condition in SandboxUpdater
+>
+> - **What changed:** Blob uploads in `processSandboxCompletion` were moved **outside** the Firestore transaction. Previously, uploading inside the transaction prevented proper retry on write conflicts — two concurrent completions (e.g. step 1 and step 4 regenerating simultaneously) would each read a stale `steps` array and overwrite the other's `'done'` status with `'generating'`. With uploads outside, the transaction is a pure read-modify-write, Firestore's optimistic locking retries correctly, and the second transaction always reads the latest state.
+> - **Why:** Steps were getting permanently stuck in `'generating'` state in Firestore after concurrent regenerations completed.
+> - **Files:**
+>   - `src/lib/sandbox-updater.ts`
+
+---
+
+> ### Playwright Tests Use Mock APIs (No Charges)
+>
+> - **What changed:** All Playwright E2E tests now intercept `POST /api/upload*` (returning a valid 1×1 PNG data URL) and `GET /api/intelligence/film-direction` (returning empty static data) via `page.route()`. This prevents real Vercel Blob uploads and LLM calls during test runs. The two-image upload test was stabilised with a `networkidle` wait between uploads, and the clip-toggle test uses `{ force: true }` on a click that was unstable due to Firestore `onSnapshot` re-renders.
+> - **Why:** Test runs were incurring real API charges and were flaky due to external network calls.
+> - **Files:**
+>   - `tests/e2e/authenticated/sandbox-images.spec.ts`
+
+---
+
+## 🗓️ **2026-05-09**
+
+---
+
+### ✨ Features
+
+---
+
+> ### Text-Only Video Generation for Image-Less Clips
+>
+> - **What changed:** Sandbox clips with no reference images assigned now route to the text-only Veo endpoint (`/api/script/generate-video/text` or `vertex/text`) instead of the image-refs endpoint. Both text routes were updated to accept `sandboxId/runId/stepNumber` and call `processSandboxCompletion`, returning `{ video_url, output_name, video_reference_url }` JSON (matching the image-refs contract). The `getImagesBase64ForStep` fallback was changed from returning the first image to returning an empty array, eliminating image bleed into unassigned clips.
+> - **Why:** Clips with no images were previously blocked from generating (or bleeding an unrelated image in). Now any clip — with or without reference images — can generate video, with the appropriate API called automatically.
+> - **Files:**
+>   - `src/app/api/script/generate-video/text/route.ts`
+>   - `src/app/api/script/generate-video/vertex/text/route.ts`
+>   - `src/app/sandbox/page.tsx`
+
+---
+
+> ### Per-Clip Visual Prompts (Architecture Redesign)
+>
+> - **What changed:** Visual prompt generation was redesigned from per-image to per-clip. The LLM now returns a `commonVideoPrompt` (theme/vibe/persona/audio only) plus `clipPrompts` — one synthesized prompt per clip, derived from all images assigned to that clip. The `/api/sandbox/generate-scripts` endpoint accepts `clipImageMap` (array of `{ clipId, images }`) and the `mode` field supports `'all' | 'common' | 'clip'`. Each clip card in the UI shows its assigned image thumbnails, a collapsible visual prompt row with Custom/Auto/None badge, and an independent ⟳ regenerate button. Clips can be removed with an X button; the slider adding clips preserves existing script content.
+> - **Why:** Per-image prompts couldn't handle the case where a clip has multiple images — the clip needed one synthesized prompt, not N separate deltas. Per-clip prompts also map cleanly to the unit of video generation.
+> - **Files:**
+>   - `src/app/api/sandbox/generate-scripts/route.ts`
+>   - `src/app/sandbox/page.tsx`
+
+---
+
+### 🐛 Fixes
+
+---
+
+> ### Gemini SDK Migration (`@google/genai`)
+>
+> - **What changed:** Migrated `src/services/gemini-image.ts` from the deprecated `@google/generative-ai` package to `@google/genai` (`GoogleGenAI` class, `ai.models.generateContent`).
+> - **Why:** `@google/generative-ai` reached end-of-life in December 2025; calls were timing out silently. The new SDK resolves the timeout issue.
+> - **Files:**
+>   - `src/services/gemini-image.ts`
+
+---
+
+## 🗓️ **2026-05-07**
+
+---
+
+### ✨ Features
+
+---
+
+> ### Per-Image Visual Prompts in Sandbox
+>
+> - **What changed:** The sandbox now generates a **common video prompt** (shared persona, style, audio rules) plus a separate **per-image visual prompt** for each reference image. Each image card in the Reference Images panel shows a collapsible "Visual prompt" row with a Custom/Default badge and an independent regenerate (⟳) button. Per-image prompts are stored on each `referenceImages[]` entry in Firestore. At video generation time, each clip's final prompt is composed as `common prompt + per-image deltas (for assigned images) + dialogue`.
+> - **Why:** When different reference images depict different scenes (beach vs. mountain), a single shared prompt loses scene-specific visual direction. This change lets the LLM and the user tailor the visual context per image without losing the global style baseline.
+> - **Files:**
+>   - `src/app/api/sandbox/generate-scripts/route.ts`
+>   - `src/app/sandbox/page.tsx`
+
+---
+
+> ### Granular Script Regeneration Modes
+>
+> - **What changed:** The `/api/sandbox/generate-scripts` endpoint now accepts a `mode` field (`'all'` | `'common'` | `'image'`) replacing the old `promptOnlyMode` boolean. `mode: 'all'` runs full multi-image generation (dialogues + common prompt + per-image prompts). `mode: 'common'` regenerates only the shared video prompt. `mode: 'image'` regenerates a single image's visual delta, sending only that image's base64 and only the dialogues for clips assigned to it.
+> - **Why:** Enables surgical regeneration — the user can refresh one image's prompt or the common prompt without re-running the whole script. Each regeneration call receives the minimum data needed, avoiding cross-image contamination.
+> - **Files:**
+>   - `src/app/api/sandbox/generate-scripts/route.ts`
+>   - `src/app/sandbox/page.tsx`
+
+---
+
 ## 🗓️ **2026-05-06**
 
 ---

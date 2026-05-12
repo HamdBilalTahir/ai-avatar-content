@@ -142,6 +142,7 @@ export async function extendReelVideo({
         aspectRatio: aspectRatio as any,
         durationSeconds: duration,
         resolution: resolution as any,
+
         ...(negativePrompt ? { negativePrompt } : {}),
       },
     });
@@ -185,6 +186,7 @@ export async function generateReelText({
         aspectRatio: '9:16',
         durationSeconds: duration,
         resolution: resolution as any,
+
         ...(negativePrompt ? { negativePrompt } : {}),
       },
     });
@@ -241,6 +243,7 @@ export async function generateReelImageDirect({
         aspectRatio: '9:16',
         durationSeconds: duration,
         resolution: resolution as any,
+
         ...(negativePrompt ? { negativePrompt } : {}),
       },
     } as any);
@@ -302,6 +305,7 @@ export async function generateReelImageRefs({
         aspectRatio: '9:16',
         durationSeconds: duration,
         resolution: resolution as any,
+
         referenceImages: refImages,
         ...(negativePrompt ? { negativePrompt } : {}),
       },

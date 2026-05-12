@@ -47,6 +47,40 @@ const AdvancedScriptSchema = z.object({
     ),
 });
 
+const MultiClipScriptSchema = z.object({
+  topicName: z
+    .string()
+    .describe(
+      'A very short, concise, file-safe topic name representing the video (e.g. "AI-Product-Promo")'
+    ),
+  dialogues: z
+    .array(z.string())
+    .describe(
+      'Array of short script dialogues, exactly matching the requested clipCount'
+    ),
+  commonVideoPrompt: z
+    .string()
+    .describe(
+      'Shared baseline covering only persona, audio rules, and overall visual style. No scene or environment details — those go in clipPrompts.'
+    ),
+  clipPrompts: z
+    .array(
+      z.object({
+        clipId: z
+          .number()
+          .describe('The clip number this prompt applies to (1-based)'),
+        prompt: z
+          .string()
+          .describe(
+            'Scene-specific visual context for this clip synthesised from its assigned images: environment, background, location, lighting mood. Empty string if the clip has no assigned images.'
+          ),
+      })
+    )
+    .describe(
+      'One entry per clip. Clips with no images get an empty prompt string.'
+    ),
+});
+
 const PromptOnlySchema = z.object({
   videoPrompt: z
     .string()
@@ -54,6 +88,27 @@ const PromptOnlySchema = z.object({
       'A single shared video prompt that describes visual style only — no dialogue content'
     ),
 });
+
+const ClipPromptOnlySchema = z.object({
+  clipPrompt: z
+    .string()
+    .describe(
+      'Scene-specific visual context for this clip synthesised from its assigned images. Empty string if no images. No persona, no audio rules, no style repetition.'
+    ),
+});
+
+// VEO injections appended to the common/shared prompt only
+const PACING_INSTRUCTION =
+  'Speak at a natural conversational pace of approximately 2.5 to 3 words per second. No pauses between words.';
+const HARD_STOP_INSTRUCTION =
+  'Stop all dialogue, mouth movement, and speech immediately when the scripted lines are finished. Hold a neutral expression after speaking.';
+const VEO_HARDCODED_INJECTIONS = `Final frame: clean held neutral expression, no fade out, no zoom, no vignette, no transition effect, no dissolve, hard clean stop on final frame.
+Consistency: lighting quality, lighting direction, environment, background, voice tone, skin texture, and color grade must remain identical throughout all segments. No drift permitted between segments or extensions.
+Skin and hair: no specular highlights on hair or face, matte skin rendering, no shine, flat diffused light on skin surface, consistent throughout.`;
+
+function appendVeoInjections(prompt: string): string {
+  return `${prompt}\n\nInstructions:\n- ${PACING_INSTRUCTION}\n- ${HARD_STOP_INSTRUCTION}\n\n${VEO_HARDCODED_INJECTIONS}`;
+}
 
 export async function POST(req: NextRequest) {
   try {
@@ -63,18 +118,16 @@ export async function POST(req: NextRequest) {
       videoCount,
       commonRules,
       avatarImageBase64,
-      promptOnlyMode,
+      avatarImages, // [{ id: string, base64: string }]
+      clipImageMap, // [{ clipId, images: [{ id, base64, mimeType }] }]
+      promptOnlyMode, // legacy boolean — treated as mode: 'common'
+      mode, // 'all' | 'common' | 'clip'
+      clipDialogue, // for mode: 'clip'
+      commonVideoPrompt, // for mode: 'clip'
       existingDialogues,
       styles,
       selectionContext,
     } = await req.json();
-
-    if (!goalText && !promptOnlyMode) {
-      return NextResponse.json(
-        { error: 'goalText is required unless in promptOnlyMode' },
-        { status: 400 }
-      );
-    }
 
     if (!process.env.GEMINI_API_KEY) {
       return NextResponse.json(
@@ -83,14 +136,27 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Resolve effective mode
+    const effectiveMode: 'all' | 'common' | 'clip' =
+      mode === 'clip'
+        ? 'clip'
+        : mode === 'common' || promptOnlyMode === true
+          ? 'common'
+          : 'all';
+
     const llm = new ChatGoogleGenerativeAI({
-      model: 'gemini-3.1-pro-preview', // User specifically requested this model format in the example
+      model: 'gemini-3.1-pro-preview',
       apiKey: process.env.GEMINI_API_KEY,
     });
 
     const count = clipCount || videoCount || 2;
 
+    // -------------------------------------------------------------------------
+    // Style pre-selection (shared across all modes)
+    // -------------------------------------------------------------------------
     let assembledSystem = commonRules || '';
+    const firstImageBase64 = avatarImages?.[0]?.base64 || avatarImageBase64;
+
     if (styles && styles.length > 0 && selectionContext) {
       try {
         const flashLlm = new ChatGoogleGenerativeAI({
@@ -123,10 +189,10 @@ Available Style Keys:
 ${availableKeys.join(', ')}`;
 
         const messages: any[] = [];
-        if (avatarImageBase64) {
-          const imageUrl = avatarImageBase64.startsWith('data:')
-            ? avatarImageBase64
-            : `data:image/jpeg;base64,${avatarImageBase64}`;
+        if (firstImageBase64) {
+          const imageUrl = firstImageBase64.startsWith('data:')
+            ? firstImageBase64
+            : `data:image/jpeg;base64,${firstImageBase64}`;
 
           messages.push(
             new HumanMessage({
@@ -162,7 +228,44 @@ ${availableKeys.join(', ')}`;
       }
     }
 
-    if (promptOnlyMode && assembledSystem && avatarImageBase64) {
+    // -------------------------------------------------------------------------
+    // mode: 'clip' — regenerate one clip's visual prompt from its assigned images
+    // -------------------------------------------------------------------------
+    if (effectiveMode === 'clip') {
+      const structuredLlm = llm.withStructuredOutput(ClipPromptOnlySchema);
+      const clipImages: { base64: string; mimeType: string }[] =
+        avatarImages ?? [];
+
+      const textContent = `You are an expert cinematic director.
+Task: Write the scene-specific visual context for a single video clip, based ONLY on its assigned reference images.
+
+Common Video Prompt (already written — do NOT repeat persona, audio, or style details from here): ${commonVideoPrompt || 'N/A'}
+Goal: ${goalText || 'N/A'}
+Clip dialogue: ${clipDialogue || 'N/A'}
+
+Rules:
+- Describe environment, background, location, and lighting mood synthesised from ALL the reference images shown.
+- If no images are provided, return an empty string.
+- 1–3 concise sentences. No persona. No audio instructions. No style template repetition.`;
+
+      const messageContent: any[] = [{ type: 'text', text: textContent }];
+      for (const img of clipImages) {
+        const url = img.base64.startsWith('data:')
+          ? img.base64
+          : `data:image/jpeg;base64,${img.base64}`;
+        messageContent.push({ type: 'image_url', image_url: { url } });
+      }
+
+      const parsed = await structuredLlm.invoke([
+        new HumanMessage({ content: messageContent }),
+      ]);
+      return NextResponse.json({ clipPrompt: parsed.clipPrompt });
+    }
+
+    // -------------------------------------------------------------------------
+    // mode: 'common' — regenerate only the shared video prompt
+    // -------------------------------------------------------------------------
+    if (effectiveMode === 'common' && assembledSystem && firstImageBase64) {
       const structuredLlm = llm.withStructuredOutput(PromptOnlySchema);
       const textContent = `You are an expert cinematic director.
 Film Direction System:
@@ -183,9 +286,9 @@ Task: Generate a video prompt based on the provided avatar image and existing di
 Goal Text Context: ${goalText || 'N/A'}
 Existing Dialogues Context: ${existingDialogues ? JSON.stringify(existingDialogues) : 'None'}`;
 
-      const imageUrl = avatarImageBase64.startsWith('data:')
-        ? avatarImageBase64
-        : `data:image/jpeg;base64,${avatarImageBase64}`;
+      const imageUrl = firstImageBase64.startsWith('data:')
+        ? firstImageBase64
+        : `data:image/jpeg;base64,${firstImageBase64}`;
 
       const messages = [
         new HumanMessage({
@@ -197,29 +300,97 @@ Existing Dialogues Context: ${existingDialogues ? JSON.stringify(existingDialogu
       ];
 
       const parsed = await structuredLlm.invoke(messages);
-
-      // Server-side Veo injections
-      const PACING_INSTRUCTION =
-        'Speak at a natural conversational pace of approximately 2.5 to 3 words per second. No pauses between words.';
-      const HARD_STOP_INSTRUCTION =
-        'Stop all dialogue, mouth movement, and speech immediately when the scripted lines are finished. Hold a neutral expression after speaking.';
-      const VEO_HARDCODED_INJECTIONS = `Final frame: clean held neutral expression, no fade out, no zoom, no vignette, no transition effect, no dissolve, hard clean stop on final frame.
-Consistency: lighting quality, lighting direction, environment, background, voice tone, skin texture, and color grade must remain identical throughout all segments. No drift permitted between segments or extensions.
-Skin and hair: no specular highlights on hair or face, matte skin rendering, no shine, flat diffused light on skin surface, consistent throughout.`;
-
-      const finalVideoPrompt = `${parsed.videoPrompt}\n\nInstructions:\n- ${PACING_INSTRUCTION}\n- ${HARD_STOP_INSTRUCTION}\n\n${VEO_HARDCODED_INJECTIONS}`;
-
+      const finalVideoPrompt = appendVeoInjections(parsed.videoPrompt);
       return NextResponse.json({ videoPrompt: finalVideoPrompt });
     }
 
-    if (assembledSystem && avatarImageBase64) {
+    // -------------------------------------------------------------------------
+    // mode: 'all' with images + clip map — full generation with per-clip prompts
+    // -------------------------------------------------------------------------
+    if (
+      effectiveMode === 'all' &&
+      goalText &&
+      assembledSystem &&
+      avatarImages &&
+      avatarImages.length > 0
+    ) {
+      const structuredLlm = llm.withStructuredOutput(MultiClipScriptSchema);
+
+      // Describe clip assignments for the LLM
+      const clipMapDesc = clipImageMap
+        ? (clipImageMap as any[])
+            .map(
+              (c: any) =>
+                `Clip ${c.clipId}: ${c.images.length > 0 ? c.images.map((img: any) => `image id=${img.id}`).join(', ') : 'no images'}`
+            )
+            .join('\n')
+        : 'No clip-image mapping provided.';
+
+      const textContent = `You are an expert scriptwriter and cinematic director for short-form video content.
+Film Direction System:
+${assembledSystem}
+
+Goal: ${goalText}
+Clip-to-image assignments:
+${clipMapDesc}
+
+Task:
+1. Generate exactly ${count} short script dialogues. Each MUST be readable out loud in 8 seconds or less.
+2. Generate a commonVideoPrompt with ONLY persona, audio rules, and overall visual style — zero environment or scene details.
+3. Generate a clipPrompt for EACH clip (clipId 1..${count}). Synthesise all images assigned to that clip into a scene description. Empty string for clips with no images.
+
+Instructions for Dialogues:
+- Each dialogue MUST be prefixed explicitly with "dialogue: " followed by the spoken text.
+- No hyphens (-) or special characters in spoken text.
+- Acting notes on separate lines.
+
+Instructions for commonVideoPrompt:
+- Persona and audio instructions FIRST (VEO prioritises top of prompt).
+- Describe the subject's persona from the reference images.
+- NO background music — only clear natural human speech.
+- Use ONLY the pre-selected style template. Follow the constraint stack: shot → lens → camera → frame rate → subject → lighting → colour grade → grain → motion blur → aspect ratio → one emotional tone word.
+- NO environment or scene location — those go in clipPrompts.
+
+Instructions for clipPrompts:
+- Describe the FULL scene for this clip: environment, background, location, lighting mood, AND the specific actions, character interactions, and movements happening in this moment.
+- If the goal includes shot-by-shot details or specific scene directions for this clip number, capture and refine them — make them more precise and cinematic while keeping them synchronised with the dialogue and the overall script arc.
+- Think of it as a director's shot note: what the camera sees, where characters are, what they are doing, and how it feels.
+- 2–4 sentences. No persona. No audio. No style repetition.
+- Empty string if the clip has no images assigned and the goal has no scene-specific direction for this clip.`;
+
+      // Attach all unique images (deduped) to the message for the LLM to see
+      const messageContent: any[] = [{ type: 'text', text: textContent }];
+      for (const img of avatarImages as any[]) {
+        const url = img.base64.startsWith('data:')
+          ? img.base64
+          : `data:image/jpeg;base64,${img.base64}`;
+        messageContent.push({ type: 'image_url', image_url: { url } });
+      }
+
+      const parsed = await structuredLlm.invoke([
+        new HumanMessage({ content: messageContent }),
+      ]);
+      const finalVideoPrompt = appendVeoInjections(parsed.commonVideoPrompt);
+
+      return NextResponse.json({
+        topicName: parsed.topicName,
+        dialogues: parsed.dialogues,
+        videoPrompt: finalVideoPrompt,
+        clipPrompts: parsed.clipPrompts,
+      });
+    }
+
+    // -------------------------------------------------------------------------
+    // mode: 'all' with single image — legacy AdvancedScriptSchema path
+    // -------------------------------------------------------------------------
+    if (goalText && assembledSystem && firstImageBase64) {
       const structuredLlm = llm.withStructuredOutput(AdvancedScriptSchema);
       const textContent = `You are an expert scriptwriter and cinematic director for short-form video content.
 Film Direction System:
 ${assembledSystem}
 
 Goal: ${goalText}
-Task: 
+Task:
 1. Generate exactly ${count} short script dialogues based on the goal. Each dialogue MUST be readable out loud in 8 seconds or less.
 2. Generate a single shared video prompt.
 
@@ -240,9 +411,9 @@ Instructions for Video Prompt:
 - Make sure to include all cinematic details described in the chosen template (camera movements, angles, voice, SFX, camera lens, lighting, etc.).
 - The final output must strictly follow the template from the Film Direction System, containing only the persona, audio instructions, and the visual style details with zero dialogue content.`;
 
-      const imageUrl = avatarImageBase64.startsWith('data:')
-        ? avatarImageBase64
-        : `data:image/jpeg;base64,${avatarImageBase64}`;
+      const imageUrl = firstImageBase64.startsWith('data:')
+        ? firstImageBase64
+        : `data:image/jpeg;base64,${firstImageBase64}`;
 
       const messages = [
         new HumanMessage({
@@ -254,23 +425,23 @@ Instructions for Video Prompt:
       ];
 
       const parsed = await structuredLlm.invoke(messages);
-
-      // Server-side Veo injections
-      const PACING_INSTRUCTION =
-        'Speak at a natural conversational pace of approximately 2.5 to 3 words per second. No pauses between words.';
-      const HARD_STOP_INSTRUCTION =
-        'Stop all dialogue, mouth movement, and speech immediately when the scripted lines are finished. Hold a neutral expression after speaking.';
-      const VEO_HARDCODED_INJECTIONS = `Final frame: clean held neutral expression, no fade out, no zoom, no vignette, no transition effect, no dissolve, hard clean stop on final frame.
-Consistency: lighting quality, lighting direction, environment, background, voice tone, skin texture, and color grade must remain identical throughout all segments. No drift permitted between segments or extensions.
-Skin and hair: no specular highlights on hair or face, matte skin rendering, no shine, flat diffused light on skin surface, consistent throughout.`;
-
-      const finalVideoPrompt = `${parsed.videoPrompt}\n\nInstructions:\n- ${PACING_INSTRUCTION}\n- ${HARD_STOP_INSTRUCTION}\n\n${VEO_HARDCODED_INJECTIONS}`;
+      const finalVideoPrompt = appendVeoInjections(parsed.videoPrompt);
 
       return NextResponse.json({
         topicName: parsed.topicName,
         dialogues: parsed.dialogues,
         videoPrompt: finalVideoPrompt,
       });
+    }
+
+    // -------------------------------------------------------------------------
+    // Fallback: no image / no film direction system — text-only generation
+    // -------------------------------------------------------------------------
+    if (!goalText && !promptOnlyMode) {
+      return NextResponse.json(
+        { error: 'goalText is required unless in promptOnlyMode' },
+        { status: 400 }
+      );
     }
 
     const structuredLlm = llm.withStructuredOutput(ScriptSchema);
