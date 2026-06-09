@@ -10,10 +10,27 @@ import ProviderBadge from '@/components/ProviderBadge';
 import { Film, Play, Download, Search } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
+function timeAgo(ms: number): string {
+  const s = Math.floor((Date.now() - ms) / 1000);
+  if (s < 60) return 'just now';
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
+}
+
 type Script = {
   id: string;
   name: string;
   createdAt: number;
+};
+
+type SandboxFinal = {
+  id: string;
+  topicName: string;
+  finalEditedVideo: string;
+  posted: boolean;
+  totalCostUsd: number | null;
+  updatedAt: number | null;
 };
 
 type GeneratedVideo = {
@@ -37,6 +54,7 @@ export default function ResultsPage() {
   const [scripts, setScripts] = useState<Script[]>([]);
   const [videos, setVideos] = useState<GeneratedVideo[]>([]);
   const [shots, setShots] = useState<Record<string, Shot>>({});
+  const [sandboxFinals, setSandboxFinals] = useState<SandboxFinal[]>([]);
   const [isLoaded, setIsLoaded] = useState(false);
 
   // Filters and Sorting
@@ -113,6 +131,30 @@ export default function ResultsPage() {
           })
         );
         setShots(loadedShots);
+
+        // Fetch sandbox finals
+        const sandboxSnap = await getDocs(
+          query(
+            collection(db, 'sandbox'),
+            where('userId', '==', user.uid),
+            orderBy('updatedAt', 'desc')
+          )
+        );
+        const loadedFinals: SandboxFinal[] = sandboxSnap.docs
+          .map((d) => {
+            const data = d.data();
+            if (!data.finalEditedVideo) return null;
+            return {
+              id: d.id,
+              topicName: data.topicName ?? 'Untitled',
+              finalEditedVideo: data.finalEditedVideo,
+              posted: data.posted === true,
+              totalCostUsd: data.totalCostUsd ?? null,
+              updatedAt: data.updatedAt?.toMillis?.() ?? null,
+            };
+          })
+          .filter(Boolean) as SandboxFinal[];
+        setSandboxFinals(loadedFinals);
       } catch (error) {
         console.error('Error loading library data:', error);
       } finally {
@@ -417,6 +459,99 @@ export default function ResultsPage() {
           {filteredScriptIds.length === 0 && searchQuery && (
             <div className="text-center py-12 text-slate-500 type-level-2">
               No results found for "{searchQuery}"
+            </div>
+          )}
+
+          {sandboxFinals.length > 0 && (
+            <div className="space-y-6 pt-4">
+              <div className="flex items-center gap-3">
+                <h1 className="text-xl font-bold text-slate-900">
+                  Sandbox Finals
+                </h1>
+                <span className="type-level-3 font-medium text-slate-500 bg-slate-100 px-2.5 py-0.5 rounded-full border border-slate-200">
+                  {sandboxFinals.length}{' '}
+                  {sandboxFinals.length === 1 ? 'video' : 'videos'}
+                </span>
+              </div>
+              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                {sandboxFinals.map((sf) => (
+                  <div
+                    key={sf.id}
+                    className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm"
+                  >
+                    <div className="relative aspect-video bg-black group">
+                      <video
+                        src={sf.finalEditedVideo}
+                        preload="metadata"
+                        className="w-full h-full object-cover"
+                      />
+                      <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                        <div className="w-8 h-8 rounded-full bg-black/40 backdrop-blur-sm flex items-center justify-center text-white">
+                          <Play className="w-3 h-3 ml-0.5" />
+                        </div>
+                      </div>
+                      <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
+                        <button
+                          onClick={() =>
+                            setPlayingVideo({
+                              url: sf.finalEditedVideo,
+                              filename: `${sf.topicName}.mp4`,
+                            })
+                          }
+                          className="w-8 h-8 rounded-full bg-white/20 hover:bg-violet-500 flex items-center justify-center text-white backdrop-blur-sm transition-colors"
+                          title="Play"
+                        >
+                          <Play className="w-3 h-3 ml-0.5" />
+                        </button>
+                        <button
+                          onClick={async () => {
+                            const res = await fetch(sf.finalEditedVideo);
+                            const blob = await res.blob();
+                            const url = URL.createObjectURL(blob);
+                            const a = document.createElement('a');
+                            a.href = url;
+                            a.download = `${sf.topicName}.mp4`;
+                            a.click();
+                            URL.revokeObjectURL(url);
+                          }}
+                          className="w-8 h-8 rounded-full bg-white/20 hover:bg-violet-500 flex items-center justify-center text-white backdrop-blur-sm transition-colors"
+                          title="Download"
+                        >
+                          <Download className="w-3 h-3" />
+                        </button>
+                      </div>
+                    </div>
+                    <div className="p-3">
+                      <p className="text-sm font-medium text-slate-800 truncate">
+                        {sf.topicName}
+                      </p>
+                      <div className="flex items-center justify-between mt-1.5">
+                        <div className="flex items-center gap-1.5">
+                          {sf.posted ? (
+                            <span className="text-[11px] text-violet-600 bg-violet-50 px-1.5 py-0.5 rounded-full font-medium">
+                              Posted
+                            </span>
+                          ) : (
+                            <span className="text-[11px] text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded-full font-medium">
+                              Unposted
+                            </span>
+                          )}
+                          {sf.totalCostUsd != null && (
+                            <span className="text-[11px] text-slate-400">
+                              ${sf.totalCostUsd.toFixed(2)}
+                            </span>
+                          )}
+                        </div>
+                        {sf.updatedAt && (
+                          <span className="text-[11px] text-slate-400">
+                            {timeAgo(sf.updatedAt)}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
         </div>

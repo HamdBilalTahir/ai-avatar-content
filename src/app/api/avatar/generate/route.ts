@@ -49,11 +49,17 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const { avatar_prompt, negative_prompt, reference_images, gemini_api_key } =
-    body as Record<string, unknown>;
+  const {
+    avatar_prompt,
+    negative_prompt,
+    reference_images,
+    gemini_api_key,
+    aspect_ratio,
+    image_size,
+  } = body as Record<string, unknown>;
 
   console.log(
-    `[avatar/generate] ▶ prompt="${String(avatar_prompt ?? '').slice(0, 80)}" refCount=${Array.isArray(reference_images) ? reference_images.length : 0} hasNegPrompt=${!!negative_prompt} hasApiKey=${!!gemini_api_key}`
+    `[avatar/generate] ▶ prompt="${String(avatar_prompt ?? '').slice(0, 80)}" refCount=${Array.isArray(reference_images) ? reference_images.length : 0} hasNegPrompt=${!!negative_prompt} hasApiKey=${!!gemini_api_key} aspectRatio=${aspect_ratio ?? 'default'} imageSize=${image_size ?? 'default'}`
   );
 
   if (
@@ -141,22 +147,56 @@ export async function POST(req: NextRequest) {
 
       try {
         console.log(`[avatar/generate] 🚀 calling generateAvatarImage...`);
-        const { image_base64, mime_type } = await generateAvatarImage(
+        const {
+          image_base64,
+          mime_type,
+          promptTokens,
+          imageOutputTokens,
+          textOutputTokens,
+        } = await generateAvatarImage(
           avatar_prompt as string,
           refs,
           negPrompt,
-          apiKey
+          apiKey,
+          typeof aspect_ratio === 'string' ? aspect_ratio : undefined,
+          typeof image_size === 'string' ? image_size : undefined
         );
+
+        // Pricing: input $0.50/1M, image output $60/1M, text output $3/1M
+        const costUsd =
+          (promptTokens * 0.5) / 1_000_000 +
+          (imageOutputTokens * 60.0) / 1_000_000 +
+          (textOutputTokens * 3.0) / 1_000_000;
+
         console.log(
-          `[avatar/generate] ✅ image generated — mime=${mime_type} base64Len=${image_base64?.length ?? 0}`
+          `[avatar/generate] ✅ image generated — mime=${mime_type} base64Len=${image_base64?.length ?? 0} promptTokens=${promptTokens} imageOutTokens=${imageOutputTokens} textOutTokens=${textOutputTokens} costUsd=$${costUsd.toFixed(5)}`
         );
-        send('result', { image_base64, mime_type });
+        send('result', {
+          image_base64,
+          mime_type,
+          costUsd,
+          promptTokens,
+          imageOutputTokens,
+          textOutputTokens,
+        });
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
+        const message =
+          err instanceof Error && err.message
+            ? err.message
+            : typeof err === 'string'
+              ? err
+              : (() => {
+                  try {
+                    return JSON.stringify(err);
+                  } catch {
+                    return String(err);
+                  }
+                })();
         console.warn(
-          `[avatar/generate] ❌ generateAvatarImage threw: ${message}`
+          `[avatar/generate] ❌ generateAvatarImage threw: ${message}`,
+          err
         );
-        send('error', { error: message });
+        send('error', { error: message || 'Image generation failed' });
       } finally {
         clearInterval(pingInterval);
         controller.close();

@@ -73,6 +73,7 @@ type BaseParams = {
   vertexKeyJson: string;
   location?: string;
   negativePrompt?: string;
+  isBroll?: boolean;
 };
 
 function buildClient(credentials: any, location: string) {
@@ -88,13 +89,16 @@ function buildConfig(
   duration: number | string | undefined,
   resolution: string | undefined,
   aspectRatio: string | undefined,
-  negativePrompt?: string
+  negativePrompt?: string,
+  isBroll?: boolean
 ) {
   return {
     aspectRatio: aspectRatio || '9:16',
     durationSeconds: Number(duration) || 8,
     resolution: resolution || '720p',
-    personGeneration: PersonGeneration.ALLOW_ALL,
+    personGeneration: isBroll
+      ? PersonGeneration.DONT_ALLOW
+      : PersonGeneration.ALLOW_ALL,
     ...(negativePrompt ? { negativePrompt } : {}),
   };
 }
@@ -106,8 +110,11 @@ function logConfig(
   resolution: string | undefined,
   mode: string,
   project: string,
-  location: string
+  location: string,
+  isBroll?: boolean
 ) {
+  const shotType =
+    isBroll === true ? 'B-roll' : isBroll === false ? 'A-roll' : 'A-roll';
   console.log(`\n==================================================`);
   console.log(`🎥 Preparing to generate: ${outputName}`);
   console.log(`==================================================`);
@@ -115,11 +122,45 @@ function logConfig(
   console.log(
     `  - Provider: Vertex AI (Project: ${project}, Location: ${location})`
   );
+  console.log(`  - Shot Type: ${shotType}`);
+  console.log(`  - Person Generation: ${isBroll ? 'DONT_ALLOW' : 'ALLOW_ALL'}`);
   console.log(`  - Mode: ${mode}`);
   console.log(`  - Model: ${modelName}`);
   console.log(`  - Duration: ${duration || 8}s`);
   console.log(`  - Resolution: ${resolution || '720p'}`);
   console.log(`==================================================\n`);
+}
+
+function isHighLoadError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return (
+    msg.includes('high load') ||
+    msg.includes('try again later') ||
+    msg.includes('503') ||
+    msg.includes('UNAVAILABLE')
+  );
+}
+
+async function withRetry<T>(
+  fn: () => Promise<T>,
+  maxAttempts = 3,
+  baseDelayMs = 15000
+): Promise<T> {
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      if (!isHighLoadError(err) || attempt === maxAttempts) throw err;
+      const delay = baseDelayMs * attempt;
+      console.warn(
+        `[vertex] High-load error on attempt ${attempt}/${maxAttempts}. Retrying in ${delay / 1000}s...`
+      );
+      await new Promise((r) => setTimeout(r, delay));
+    }
+  }
+  throw lastErr;
 }
 
 async function saveVertexVideo(
@@ -189,6 +230,7 @@ export async function extendVertexVideo({
   location = 'us-central1',
   videoReference,
   negativePrompt,
+  isBroll,
 }: BaseParams & { videoReference: any }) {
   const credentials = JSON.parse(vertexKeyJson);
   logConfig(
@@ -198,18 +240,27 @@ export async function extendVertexVideo({
     resolution,
     'Extend Video',
     credentials.project_id,
-    location
+    location,
+    isBroll
   );
   console.log(`  - Prompt: ${prompt.substring(0, 50)}...`);
 
   const ai = buildClient(credentials, location);
-  const operation = await (ai.models.generateVideos as any)({
-    model: modelName,
-    prompt,
-    video: videoReference,
-    config: buildConfig(duration, resolution, aspectRatio, negativePrompt),
+  return withRetry(async () => {
+    const operation = await (ai.models.generateVideos as any)({
+      model: modelName,
+      prompt,
+      video: videoReference,
+      config: buildConfig(
+        duration,
+        resolution,
+        aspectRatio,
+        negativePrompt,
+        isBroll
+      ),
+    });
+    return saveVertexVideo(ai, operation, outputName, credentials);
   });
-  return saveVertexVideo(ai, operation, outputName, credentials);
 }
 
 // ─── Text → Video ─────────────────────────────────────────────────────────────
@@ -224,6 +275,7 @@ export async function generateVertexText({
   vertexKeyJson,
   location = 'us-central1',
   negativePrompt,
+  isBroll,
 }: BaseParams) {
   const credentials = JSON.parse(vertexKeyJson);
   logConfig(
@@ -233,17 +285,26 @@ export async function generateVertexText({
     resolution,
     'Text → Video',
     credentials.project_id,
-    location
+    location,
+    isBroll
   );
   console.log(`  - Prompt: ${prompt.substring(0, 50)}...`);
 
   const ai = buildClient(credentials, location);
-  const operation = await ai.models.generateVideos({
-    model: modelName,
-    prompt,
-    config: buildConfig(duration, resolution, aspectRatio, negativePrompt),
+  return withRetry(async () => {
+    const operation = await ai.models.generateVideos({
+      model: modelName,
+      prompt,
+      config: buildConfig(
+        duration,
+        resolution,
+        aspectRatio,
+        negativePrompt,
+        isBroll
+      ),
+    });
+    return saveVertexVideo(ai, operation, outputName, credentials);
   });
-  return saveVertexVideo(ai, operation, outputName, credentials);
 }
 
 // ─── Image Direct → Video ─────────────────────────────────────────────────────
@@ -326,8 +387,10 @@ export async function generateVertexFirstLastFrame({
     },
   };
 
-  const operation = await (ai.models.generateVideos as any)(configObj);
-  return saveVertexVideo(ai, operation, outputName, credentials);
+  return withRetry(async () => {
+    const operation = await (ai.models.generateVideos as any)(configObj);
+    return saveVertexVideo(ai, operation, outputName, credentials);
+  });
 }
 
 // ─── Reference Images → Video ─────────────────────────────────────────────────
@@ -343,6 +406,7 @@ export async function generateVertexImageRefs({
   location = 'us-central1',
   referenceImages,
   negativePrompt,
+  isBroll,
 }: BaseParams & {
   referenceImages: { base64: string; mimeType: string }[];
 }) {
@@ -354,7 +418,8 @@ export async function generateVertexImageRefs({
     resolution,
     'Reference Images → Video',
     credentials.project_id,
-    location
+    location,
+    isBroll
   );
   console.log(`  - Prompt: ${prompt.substring(0, 50)}...`);
   console.log(`  - Reference Images: ${referenceImages.length}`);
@@ -364,7 +429,13 @@ export async function generateVertexImageRefs({
     model: modelName,
     prompt,
     config: {
-      ...buildConfig(duration, resolution, aspectRatio, negativePrompt),
+      ...buildConfig(
+        duration,
+        resolution,
+        aspectRatio,
+        negativePrompt,
+        isBroll
+      ),
       referenceImages: referenceImages.map(
         (img) =>
           ({
@@ -396,6 +467,8 @@ export async function generateVertexImageRefs({
     )
   );
 
-  const operation = await ai.models.generateVideos(configObj);
-  return saveVertexVideo(ai, operation, outputName, credentials);
+  return withRetry(async () => {
+    const operation = await ai.models.generateVideos(configObj);
+    return saveVertexVideo(ai, operation, outputName, credentials);
+  });
 }

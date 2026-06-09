@@ -5,8 +5,16 @@ export async function generateAvatarImage(
   avatarPrompt: string,
   referenceImages?: ReferenceImage[],
   negativePrompt?: string,
-  apiKey?: string
-): Promise<{ image_base64: string; mime_type: string }> {
+  apiKey?: string,
+  aspectRatio?: string,
+  imageSize?: string
+): Promise<{
+  image_base64: string;
+  mime_type: string;
+  promptTokens: number;
+  imageOutputTokens: number;
+  textOutputTokens: number;
+}> {
   const resolvedKey = apiKey || process.env.GEMINI_API_KEY;
   if (!resolvedKey) {
     throw new Error('Missing GEMINI_API_KEY');
@@ -18,9 +26,15 @@ export async function generateAvatarImage(
   const negSuffix = negativePrompt?.trim()
     ? ` Do not include: ${negativePrompt.trim()}.`
     : '';
+
+  // Inject aspect ratio and size as text directives — imageConfig is Imagen-only
+  // and not supported by gemini-3.1-flash-image-preview.
+  const aspectSuffix = aspectRatio ? ` Use a ${aspectRatio} aspect ratio.` : '';
+  const sizeSuffix = imageSize ? ` Generate at ${imageSize} resolution.` : '';
+
   const textPrompt = hasRefs
-    ? `Using the provided reference image${referenceImages!.length > 1 ? 's' : ''} as a visual guide, generate an image that matches this description: ${avatarPrompt}${negSuffix}`
-    : `${avatarPrompt}${negSuffix}`;
+    ? `Using the provided reference image${referenceImages!.length > 1 ? 's' : ''} as a visual guide, generate an image that matches this description: ${avatarPrompt}${negSuffix}${aspectSuffix}${sizeSuffix}`
+    : `${avatarPrompt}${negSuffix}${aspectSuffix}${sizeSuffix}`;
 
   const contents: any[] = [{ text: textPrompt }];
   if (hasRefs) {
@@ -32,7 +46,9 @@ export async function generateAvatarImage(
   }
 
   const TIMEOUT_MS = 120_000;
-  console.log(`[gemini-image] 🚀 starting generation — hasRefs=${hasRefs}`);
+  console.log(
+    `[gemini-image] 🚀 starting generation — hasRefs=${hasRefs} aspectRatio=${aspectRatio ?? 'default'} imageSize=${imageSize ?? 'default'}`
+  );
   const start = Date.now();
   const pingInterval = setInterval(() => {
     console.log(
@@ -82,8 +98,25 @@ export async function generateAvatarImage(
     throw new Error('Gemini returned no image in response');
   }
 
+  const usage = response.usageMetadata ?? {};
+  const promptTokens: number = usage.promptTokenCount ?? 0;
+
+  const candidatesDetails: Array<{ modality?: string; tokenCount?: number }> =
+    usage.candidatesTokensDetails ?? [];
+  const imageOutputTokens =
+    candidatesDetails.find((d) => d.modality === 'IMAGE')?.tokenCount ?? 0;
+  const textOutputTokens =
+    candidatesDetails.find((d) => d.modality === 'TEXT')?.tokenCount ?? 0;
+
+  console.log(
+    `[gemini-image] tokens — prompt=${promptTokens} imageOut=${imageOutputTokens} textOut=${textOutputTokens}`
+  );
+
   return {
     image_base64: imagePart.inlineData.data,
     mime_type: imagePart.inlineData.mimeType,
+    promptTokens,
+    imageOutputTokens,
+    textOutputTokens,
   };
 }

@@ -1,4 +1,405 @@
-## 🗓️ **2026-05-12** (latest)
+## 🗓️ **2026-06-10** (latest)
+
+---
+
+### ✨ Features
+
+---
+
+> ### API: Mark Sandbox as Posted Endpoint
+>
+> - **What changed:** Added `POST /api/exports/mark-posted` — bearer-token-protected endpoint (same `apiConfig/exportKeys.finalVideosKey` key as the GET finals endpoint) that accepts `{ sandboxId }` in the JSON body and sets `posted: true` and `postedAt: serverTimestamp()` on the sandbox document. Returns `{ success, sandboxId, posted }`. Returns 404 if the sandbox doesn't exist.
+> - **Why:** Allows external tools and automation to mark a video as posted without needing to open the UI — mirrors exactly what the "Mark as Posted" button does in the sandbox page.
+> - **Files:**
+>   - `src/app/api/exports/mark-posted/route.ts` _(new)_
+
+---
+
+> ### API: Export Final Videos Endpoint with Cost Breakdown
+>
+> - **What changed:** Added `GET /api/exports/final-videos` — a bearer-token-protected endpoint that returns all sandboxes with a `finalEditedVideo` uploaded. The API key is stored in Firestore `apiConfig/exportKeys.finalVideosKey` and validated on every request. Each video in the response includes a `cost` object with `grandTotalUsd`, `videoCostUsd` (summed from all run docs in the `generatedVideos` subcollection), `imageGenCostUsd`, and `scriptGenCostUsd`. Response shape: `{ count, videos: [{ id, topicName, finalEditedVideo, posted, postedAt, updatedAt, cost }] }`.
+> - **Why:** Provides a machine-readable way to pull all finalized videos and their production costs for downstream reporting or automation without needing Google OAuth.
+> - **Files:**
+>   - `src/app/api/exports/final-videos/route.ts` _(new)_
+>   - Firestore: `apiConfig/exportKeys.finalVideosKey` seeded
+
+---
+
+> ### Sandbox: Video Cost — Banner Updates After Clip Regeneration
+>
+> - **What changed:** Added `loadRunsForSandbox(sandboxId)` at the end of `handleRetryStep` so the cost banner refreshes immediately after a clip is regenerated. Previously, `totalCostUsd` was correctly incremented in Firestore via `increment()` on each completion, but the `runs` state in memory was never reloaded — so the banner stayed stale until a full page refresh.
+> - **Why:** The grand total banner derives `videoCost` from the in-memory `runs` array. Without reloading runs after a retry, the incremented cost was invisible in the UI even though Firestore was correct.
+> - **Files:**
+>   - `src/app/sandbox/page.tsx`
+
+---
+
+> ### Sandbox: Admin — Backfill Voula-UGC-Reel Video Cost in Firestore
+>
+> - **What changed:** Corrected `totalCostUsd` and per-clip `costUsd` for `run_1` in the `Voula-UGC-Reel` sandbox directly via Firebase Admin SDK. Previous values ($48 total, $12/clip) used the old `$1.50/sec` rate. Corrected to `$12.80` total and `$3.20/clip` (veo-3.1-generate, 1080p, $0.40/sec × 8s). Clip 4's missing `costUsd` was also patched.
+> - **Why:** Run was generated before the rate constants were corrected; stored values were 3.75× too high.
+> - **Files:** Firestore only (no code change)
+
+---
+
+> ### Sandbox: Video Cost — Accumulate Per Clip Including Retries
+>
+> - **What changed:** Moved `totalCostUsd` accumulation from a one-shot end-of-run calculation into `runStep` itself, using Firestore `increment()`. Now every clip that completes successfully — whether on the initial run or a later retry — immediately increments `totalCostUsd` on the run document and persists the updated steps to Firestore. The redundant final recalculation in `handleCreateVideos` is removed. This also fixes a secondary bug where the success path of `runStep` never wrote the done-step state (video URL, versions, cost) to Firestore — only the 'generating' state was being persisted.
+> - **Why:** Retried clips generate real API cost that was previously invisible: `step.costUsd` was overwritten on each retry and `totalCostUsd` was never updated by `handleRetryStep`. Using `increment()` per completion is the same pattern as image gen cost tracking and correctly accumulates across all attempts.
+> - **Files:**
+>   - `src/app/sandbox/page.tsx`
+
+---
+
+> ### Sandbox: Veo Video Cost — Correct Rates and Resolution-Aware Pricing
+>
+> - **What changed:** Updated `VEO_PRICE_PER_SECOND` constants to match Google's current published rates (as of 2026-06-10, post-April 7 price cut): `veo-3.1-lite` $0.05/s (720p) / $0.08/s (1080p); `veo-3.1-fast` $0.10/s (720p) / $0.12/s (1080p) / $0.30/s (4K); `veo-3.1-generate` $0.40/s (720p+1080p) / $0.60/s (4K). Previous constants ($0.35, $0.75, $1.50/s) were 3–7× too high. Made pricing resolution-dependent: `clipCostValue` and `clipCostUsd` now accept a `resolution` parameter and look up the correct rate from a nested `model → resolution → $/sec` table. Both call sites (per-clip cost stored in Firestore after generation, and the clip cost badge in the UI) now pass `videoQuality` state. Falls back to 1080p rate if the selected resolution has no entry for the model.
+> - **Why:** The hardcoded flat rates were significantly overestimating video cost. Veo pricing varies by resolution and was cut on April 7, 2026; the constants needed updating to reflect what users are actually billed.
+> - **Files:**
+>   - `src/app/sandbox/page.tsx`
+
+---
+
+> ### Admin: One-Off Script Cost Backfill — Voula UGC Reel
+>
+> - **What changed:** Manually calculated and saved `scriptGenCostUsd: 0.012114` directly to Firestore for the `Voula-UGC-Reel` sandbox (`sandbox_1780998421001_3l2q9n`) via the Firebase Admin SDK. This sandbox was generated before dynamic cost tracking was added. Cost was derived from actual content already stored in Firestore: input = goal text (281 tokens) + 4 reference images (4 × 1,032 tokens = 4,128 tokens, using Gemini's `ceil(w/768)×ceil(h/768)×258` tiling formula for ~1024px portraits) + Flash pre-selection call (goal 281 + 1 image 1,032 = 1,313 tokens); output = 4 script dialogues + 4 visual prompts + shared video prompt (640 tokens total). Rates: Flash $0.15/1M in / $0.60/1M out, Pro $1.25/1M in / $10/1M out. No API re-run was required.
+> - **Why:** The sandbox was generated before cost tracking was implemented; without backfilling the cost, it would never appear in the grand total or breakdown banner.
+> - **Files:** Firestore only (no code change)
+
+---
+
+> ### Sandbox: Script Generation Cost Tracking — Dynamic Token-Based Pricing
+>
+> - **What changed:** Script generation cost is now tracked dynamically based on actual input/output tokens returned by the Gemini API. The `/api/sandbox/generate-scripts` route now calls `withStructuredOutput(schema, { includeRaw: true })` on every LLM invocation, extracts `usage_metadata.input_tokens` and `usage_metadata.output_tokens` from the raw `AIMessage`, and computes cost using per-model rates: `gemini-2.5-flash` ($0.15/1M input, $0.60/1M output) for the style pre-selection step, and `gemini-3.1-pro-preview` ($1.25/1M input, $10/1M output, using gemini-2.5-pro rates as proxy) for all main generation calls. Tokens are accumulated across both calls in a single request. All six response paths (`clip`, `common`, `all+images`, `all+legacy`, `fallback`) return `scriptCostUsd`. The sandbox page adds a `scriptGenCostUsd` state, loads it from Firestore on sandbox select, increments it atomically in Firestore via `increment()` after each generate or regenerate call, and includes it in the grand total banner with a `Scripts: $X.XX` breakdown line. Applies to both "Generate Script" and "Regenerate Prompt" actions.
+> - **Why:** Script generation makes multiple LLM calls per request (Flash pre-selection + Pro main gen) with variable prompt length and image payloads; a fixed estimate would be wrong every time. Real token data is available from the API response and should be the source of truth.
+> - **Files:**
+>   - `src/app/api/sandbox/generate-scripts/route.ts`
+>   - `src/app/sandbox/page.tsx`
+
+---
+
+> ### Sandbox: Reference Images — Download with Native Save Dialog
+>
+> - **What changed:** Each reference image card now has a download button (↓) to the left of the delete X. Clicking it fetches the image blob and opens the native OS **Save As** file picker via `showSaveFilePicker` with a suggested filename (`reference_{id}.{ext}`) and an image type filter. Falls back to a standard `<a download>` click on browsers that don't support the File System Access API (Firefox, Safari). `AbortError` (user cancelled the dialog) is silently swallowed.
+> - **Why:** Users need to save generated or uploaded reference images locally; the native picker lets them choose the location rather than dumping to the default downloads folder.
+> - **Files:**
+>   - `src/app/sandbox/page.tsx`
+
+---
+
+### 🐛 Fixes
+
+---
+
+> ### Image Generation: Dynamic Cost from Real Token Usage
+>
+> - **What changed:** Removed the fixed `IMAGE_GEN_COST_USD = 0.063` constant. `generateAvatarImage` now reads `response.usageMetadata` and returns `promptTokens`, `imageOutputTokens`, and `textOutputTokens`. The `/api/avatar/generate` route computes exact cost inline (`promptTokens × $0.50/1M + imageOutputTokens × $60/1M + textOutputTokens × $3/1M`) and sends `costUsd` alongside the image in the SSE result event. The sandbox uses the actual `costUsd` from the event to increment `imageGenCostUsd`; falls back to `0` (not a fixed estimate) if the API returns no token data.
+> - **Why:** A hardcoded per-image estimate is wrong every time the prompt length or reference image count changes. Real token data is available from the API and should be used.
+> - **Files:**
+>   - `src/services/gemini-image.ts`
+>   - `src/app/api/avatar/generate/route.ts`
+>   - `src/app/sandbox/page.tsx`
+
+---
+
+> ### Image Generation: Fixed Empty Error Payload (`{}`)
+>
+> - **What changed:** The `/api/avatar/generate` route now uses a robust error message extraction chain: `err.message` (if non-empty) → `String(err)` → `JSON.stringify(err)`, always sending a non-empty `error` string. The root cause was `imageConfig` (`aspectRatio`, `imageSize`) being passed to `gemini-3.1-flash-image-preview`, which is an Imagen-only config field. The SDK threw an error with an undefined `message`, which `JSON.stringify({ error: undefined })` silently serialised to `{}`. Fixed by injecting aspect ratio and size as text directives in the prompt instead.
+> - **Why:** `{}` error payloads gave no actionable information; aspect ratio and size are better handled via prompt text for Gemini native image generation models.
+> - **Files:**
+>   - `src/services/gemini-image.ts`
+>   - `src/app/api/avatar/generate/route.ts`
+
+---
+
+> ### Sandbox: Total Cost Banner in Output Panel
+>
+> - **What changed:** The Output / Preview panel header now shows a grand total cost in the top-right corner once any spend has been recorded. It sums video run costs (from all `runs[].totalCostUsd`) and image generation costs (`imageGenCostUsd`), with a breakdown line for each and an "approx." note. `totalCostUsd` was added to the `RunRecord` type. The banner only renders when the total is greater than zero.
+> - **Why:** Users had no single view of total sandbox spend across video generation and image generation.
+> - **Files:**
+>   - `src/app/sandbox/page.tsx`
+
+---
+
+> ### Image Generation: Corrected Per-Image Price Estimate
+>
+> - **What changed:** Updated `IMAGE_GEN_COST_USD` from `$0.04` to `$0.063` based on the actual Google Cloud pricing: Gemini 3.1 Flash Image output = $60/1M tokens, ~1,058 output tokens per standard generated image. (Subsequently removed entirely in favour of dynamic token-based pricing.)
+> - **Why:** The original estimate did not account for the actual pricing tier or typical token count per generated image.
+> - **Files:**
+>   - `src/app/sandbox/page.tsx`
+
+---
+
+## 🗓️ **2026-06-09**
+
+---
+
+### ✨ Features
+
+---
+
+> ### Sandbox: Mark as Posted Button
+>
+> - **What changed:** The Final Edited Video section now includes a "Mark as Posted" button that appears once a final video has been uploaded. Clicking it writes `posted: true` and `postedAt: serverTimestamp()` directly to the sandbox Firestore document via the client SDK. The button is replaced by a purple "Posted" badge once marked. The `posted` field is loaded from Firestore when a sandbox is opened.
+> - **Why:** Users needed a way to mark a sandbox as posted from the UI without calling the API endpoint manually.
+> - **Files:**
+>   - `src/app/sandbox/page.tsx`
+
+---
+
+> ### Generated Video Library: Sandbox Finals Section
+>
+> - **What changed:** The Generated Video Library (`/results`) now includes a "Sandbox Finals" section below the existing script-based videos. It queries the `sandbox` Firestore collection for all sandboxes belonging to the user that have a `finalEditedVideo` URL set, ordered by `updatedAt` desc. Each card shows a video thumbnail with play/download on hover, the topic name, a Posted/Unposted badge, total cost, and time ago. The section is only rendered if at least one sandbox final exists.
+> - **Why:** Sandbox-generated finals were not visible anywhere in the library — the existing video library only queried the `generatedVideos` collection from the older pipeline.
+> - **Files:**
+>   - `src/app/results/page.tsx`
+
+---
+
+> ### Sandbox: Image Generation — Up to 3 Guiding Reference Images
+>
+> - **What changed:** The image generation panel now includes a guiding images row below the aspect ratio and size dropdowns. Up to 3 images can be attached via a dashed-border file input. Each attached image shows as a 48×48 thumbnail with a red × to remove it. Multiple files can be selected at once (capped to fill the remaining slots). On generation, all attached images are passed as `reference_images` in the `/api/avatar/generate` request body — the route and `generateAvatarImage` service already supported this. Object URLs are created client-side for preview only; images are passed as base64 to the API. The guiding images persist across regenerations until manually removed.
+> - **Why:** Users need to guide image style, composition, or subject appearance using existing photos — e.g. a product shot, a scene reference, or a persona photo.
+> - **Files:**
+>   - `src/app/sandbox/page.tsx`
+
+---
+
+> ### Sandbox: Image Generation — Console Logs for Debugging
+>
+> - **What changed:** `handleGenerateImage` and `handleUseGeneratedImage` now emit structured `[ImageGen]` prefixed logs at every key step: generation start (prompt, sandboxId), API response status, each SSE event received (type and count), result received (mime type, base64 length), cost tracked (per-attempt and running total), Firestore increment confirmed, blob upload URL on success, and Firestore reference images updated. Errors log via `console.error` with the full message. The SSE loop also logs `stream closed` with total event count on completion.
+> - **Why:** Image generation is a multi-step async flow (SSE stream → base64 decode → blob upload → Firestore write) with no visible feedback on failure; logs make it easy to pinpoint exactly which step broke.
+> - **Files:**
+>   - `src/app/sandbox/page.tsx`
+
+---
+
+> ### Sandbox: Image Generation — Aspect Ratio and Image Size Controls
+>
+> - **What changed:** The image generation panel now includes two dropdowns below the prompt textarea: **Aspect Ratio** (`9:16`, `1:1`, `16:9`, `4:3`, `3:4`) defaulting to `1:1`, and **Image Size** (`1K`, `2K`, `4K`) defaulting to `1K`. Both selections are passed as `aspect_ratio` and `image_size` in the `/api/avatar/generate` request body. The route reads and logs these fields and passes them through to `generateAvatarImage`. The service sets `imageConfig: { aspectRatio, imageSize }` inside the Gemini `generateContent` config — values supported natively by the `@google/genai` SDK's `ImageConfig` interface.
+> - **Why:** Different use cases require different orientations (9:16 for Reels/TikTok, 1:1 for feed posts) and resolutions (1K for quick tests, 4K for final assets).
+> - **Files:**
+>   - `src/app/sandbox/page.tsx`
+>   - `src/app/api/avatar/generate/route.ts`
+>   - `src/services/gemini-image.ts`
+
+---
+
+> ### Sandbox: AI Image Generation in Reference Images Panel
+>
+> - **What changed:** The Reference Images panel header now includes a "Generate" toggle button. When expanded, a textarea accepts an image prompt. Clicking "Generate" calls `/api/avatar/generate` via SSE streaming and shows the result as an inline **preview** — it is not yet added to Reference Images. The user can **Regenerate** (replaces the preview) or click **"Add to References"** to finalise. Only on "Add to References" does the image get uploaded to Vercel Blob and added to `avatarImages`. Every generation attempt (including discarded previews) increments `imageGenCostUsd` on the sandbox Firestore document via `increment()` and updates local state. A "Spent so far: $X.XX" label appears once any cost has been accrued. The button label changes to "Regenerate" when a preview is already showing. Previous preview object URLs are revoked on each new generation to avoid memory leaks. A module-level `IMAGE_GEN_COST_USD = 0.04` constant (Gemini Flash image generation estimate) is used for both the per-attempt label and cost tracking.
+> - **Why:** Auto-adding every generation to the reference list forced users to delete unwanted attempts. Tracking cost per attempt (not per accepted image) ensures accurate spend accounting regardless of how many generations it takes to find the right result.
+> - **Files:**
+>   - `src/app/sandbox/page.tsx`
+
+---
+
+## 🗓️ **2026-06-02**
+
+---
+
+### 🐛 Fixes
+
+---
+
+> ### B-Roll: No-Face Enforcement via API-Level `personGeneration: DONT_ALLOW`
+>
+> - **What changed:** B-roll clips now set `personGeneration: DONT_ALLOW` in the Vertex AI generation config instead of the previous `ALLOW_ALL`. This is threaded from the sandbox (`isBroll` flag in the payload) through the `image-refs` and `text` route handlers into `buildConfig` in `vertex-video.ts`. Previously, text-prompt instructions like "No human faces" were overridden by the API-level `ALLOW_ALL` setting, causing faces to appear regardless.
+> - **Why:** VEO's API-level `personGeneration` config takes precedence over text prompt instructions. The text-only approach was insufficient.
+> - **Files:**
+>   - `src/services/vertex-video.ts`
+>   - `src/app/api/script/generate-video/vertex/image-refs/route.ts`
+>   - `src/app/api/script/generate-video/vertex/text/route.ts`
+>   - `src/app/sandbox/page.tsx`
+
+---
+
+> ### B-Roll: Skip "All Clips" Avatar Images
+>
+> - **What changed:** `getImagesBase64ForStep` now accepts an `isBroll` flag. When true, it only returns images explicitly assigned to that clip number — skipping any image with `assignedTo: 'all'` (typically the avatar/person photo). The call in `runStep` passes `isBroll` to this function.
+> - **Why:** Avatar images tagged "All clips" were silently being passed as reference images to B-roll clips, causing VEO to reproduce the person's face even without the persona text prompt.
+> - **Files:**
+>   - `src/app/sandbox/page.tsx`
+
+---
+
+> ### B-Roll: Strip Persona Prompt, Inject No-Faces Instruction
+>
+> - **What changed:** For B-roll clips, `finalPrompt` no longer includes `defaultVideoPrompt` (which describes the avatar's persona and face). Instead it starts with `"No human faces. No people. No human subjects. B-roll footage only."` followed by the clip visual prompt and dialogue.
+> - **Why:** The shared video prompt describes the avatar's appearance in detail. Including it in B-roll clips gave VEO a textual cue to generate a person even when no reference images were provided.
+> - **Files:**
+>   - `src/app/sandbox/page.tsx`
+
+---
+
+> ### B-Roll: Allow Explicitly-Assigned Reference Images (Scenery/Objects)
+>
+> - **What changed:** Removed the blanket `isBroll ? [] : ...` image skip. B-roll clips can now receive reference images that are explicitly assigned to them (e.g. scenery, architecture, objects). Only "All clips" avatar images are excluded.
+> - **Why:** Users need to provide reference images of locations and objects for B-roll shots.
+> - **Files:**
+>   - `src/app/sandbox/page.tsx`
+
+---
+
+### 🔍 Observability
+
+---
+
+> ### Vertex AI Logs: Shot Type and Person Generation
+>
+> - **What changed:** `logConfig` in `vertex-video.ts` now prints `Shot Type: A-roll / B-roll` and `Person Generation: ALLOW_ALL / DONT_ALLOW`. The sandbox step log includes `[A-roll]` / `[B-roll]` in the API call line. Both Vertex route handlers also log shot type before calling the service.
+> - **Why:** Makes it immediately visible in server logs whether a clip is being generated as A-roll or B-roll and what person generation policy is in effect.
+> - **Files:**
+>   - `src/services/vertex-video.ts`
+>   - `src/app/api/script/generate-video/vertex/image-refs/route.ts`
+>   - `src/app/api/script/generate-video/vertex/text/route.ts`
+>   - `src/app/sandbox/page.tsx`
+
+---
+
+### ✨ Features
+
+---
+
+> ### Default Video Prompt: Style-Only, No Persona
+>
+> - **What changed:** The `commonVideoPrompt` / default video prompt no longer contains any persona or subject description. All three generation paths (`mode: 'all'`, `mode: 'common'`, legacy single-image) now instruct the LLM to produce only audio rules and cinematic style (camera, lens, frame rate, lighting, colour grade, aspect ratio). Persona language ("Woman in her early 30s, long dark brown wavy hair…") has been removed entirely from the shared prompt. The default prompt is now included in both A-roll and B-roll `finalPrompt` (previously skipped for B-roll because it contained persona). The `ClipItemSchema` description and constraint stack were updated to remove "subject and blocking" from the shared prompt layer.
+> - **Why:** The default prompt was A-roll-specific — including it in B-roll video generation risked confusing VEO with person-describing language. Making it style-only means a single prompt is valid for all clip types.
+> - **Files:**
+>   - `src/app/api/sandbox/generate-scripts/route.ts`
+>   - `src/app/sandbox/page.tsx`
+
+---
+
+> ### Persona Moved to A-Roll Clip Prompts
+>
+> - **What changed:** A-roll `clipPrompt` instructions (in `mode: 'all'` and `mode: 'clip'`) now begin with a brief persona description of the subject derived from the reference images, followed by the scene description. The `ClipPromptOnlySchema` and `ClipItemSchema.clipPrompt` descriptions were updated accordingly. The `mode: 'clip'` regeneration endpoint now accepts `isBroll` and applies either the A-roll rule (persona + scene) or B-roll rule (environment only, no person) depending on clip type. `handleRegenerateClipPrompt` in the sandbox passes `isBroll` and also correctly filters out `assignedTo: 'all'` avatar images for B-roll clips.
+> - **Why:** Persona details needed somewhere in the prompt chain for A-roll — moving them to the clip-level keeps the shared default prompt neutral while still giving VEO the subject description it needs per A-roll clip.
+> - **Files:**
+>   - `src/app/api/sandbox/generate-scripts/route.ts`
+>   - `src/app/sandbox/page.tsx`
+
+---
+
+> ### B-Roll Badge Removed from Generated Dialogues Section
+>
+> - **What changed:** The read-only "B-roll" badge that appeared next to the Regenerate button in each dialogue card has been removed.
+> - **Why:** The B-roll toggle now lives on the image card in the Reference Images section — the dialogue section no longer needs a visual indicator.
+> - **Files:**
+>   - `src/app/sandbox/page.tsx`
+
+---
+
+> ### B-Roll Toggle on Image Cards (Reference Images Section)
+>
+> - **What changed:** The B-roll toggle has moved from the generated dialogue section to each image card in the Reference Images section. Each uploaded image can individually be marked as a B-roll reference (scenery, objects, architecture — no person). The toggle persists to Firestore per image entry. When all images assigned to a clip are marked B-roll, that clip is treated as a B-roll clip throughout generation. The dialogue section shows a read-only "B-roll" badge for clips the LLM auto-detects as B-roll.
+> - **Why:** B-roll is a property of the reference images (what they depict), not of the dialogue text. Tagging at the image level is the natural point of control and lets the LLM auto-determine clip type from visual content before script generation.
+> - **Files:**
+>   - `src/app/sandbox/page.tsx`
+
+---
+
+> ### B-Roll Auto-Detection at Script Generation Time
+>
+> - **What changed:** `clipImageMap` now includes an `isBroll` flag per image entry. The `generate-scripts` route labels each image in the clip map as either `[B-roll: scenery/object/architecture, no person]` or `[A-roll: person/avatar]` and marks clips where all assigned images are B-roll as `[B-ROLL CLIP]`. The `ClipItemSchema` includes an `isBroll` field the LLM sets based on visual inspection. Script generation instructions give separate `clipPrompt` rules for A-roll (full scene with person) vs. B-roll (no person language — no "subject", "speaking", "camera-facing").
+> - **Why:** Lets the LLM auto-assign `isBroll: true` on generated script items without requiring the user to manually toggle it per dialogue entry.
+> - **Files:**
+>   - `src/app/api/sandbox/generate-scripts/route.ts`
+>   - `src/app/sandbox/page.tsx`
+
+---
+
+> ### Vertex AI Retry Now Covers Full Operation (Generate + Poll)
+>
+> - **What changed:** `withRetry()` previously only wrapped the initial `generateVideos` call (job submission, ~instant). High-load errors that occur during the async polling phase inside `saveVertexVideo` — after up to 130s of waiting — were outside the retry scope and propagated as unhandled failures. All four generation functions (`generateVertexText`, `generateVertexImageRefs`, `extendVertexVideo`, `generateVertexFirstLastFrame`) now wrap the entire `generateVideos + saveVertexVideo` pair in `withRetry()`, so a high-load error at any stage triggers a full retry with a new operation.
+> - **Why:** Observed in production: `Vertex AI operation error: {"code":8,"message":"The service is currently experiencing high load..."}` thrown from `saveVertexVideo` was not caught by the retry wrapper, causing clips to fail with no retry despite the logic existing.
+> - **Files:**
+>   - `src/services/vertex-video.ts`
+
+---
+
+> ### B-Roll: Server-Side No-Faces Prompt Prefix (Defense-in-Depth)
+>
+> - **What changed:** Both Vertex route handlers (`image-refs` and `text`) now prepend `"No human faces. No people. No human subjects. B-roll footage only."` to the prompt server-side when `isBroll` is true, independent of the client-built prompt.
+> - **Why:** Guards against stale browser cache sending a client-composed prompt that still includes persona language, which would trigger VEO's safety filter even with `personGeneration: DONT_ALLOW` set.
+> - **Files:**
+>   - `src/app/api/script/generate-video/vertex/image-refs/route.ts`
+>   - `src/app/api/script/generate-video/vertex/text/route.ts`
+
+---
+
+## 🗓️ **2026-05-19**
+
+---
+
+### ✨ Features
+
+---
+
+> ### Variation Clips (A/B/C) — Multi-Script, Multi-Final-Video
+>
+> - **What changed:** Introduced a "variation" concept for clips. The LLM now detects variation descriptions in the goal text and assigns letter suffixes (`7A`, `7B`, `7C`, etc.) along with `variationGroup` and `variationNote` fields. Variations represent alternative takes of the same scene — same position in the sequence, different dialogue or movement. The run produces one stitched final video per variant letter (Final A, Final B, Final C), stored in `stitchedVideoUrls`. The script editor groups variation clips under a violet "Scene N — N alternatives" header. The active run panel renders variation clips side-by-side in a flex row. Image assignment buttons display clip labels (e.g., `7A`, `7B`) after script generation, with violet tinting for variant buttons.
+> - **Why:** Enables A/B/C testing of CTA variations within a single generation run without creating separate sandboxes or manually duplicating clips.
+> - **Files:**
+>   - `src/app/sandbox/page.tsx`
+>   - `src/app/api/sandbox/generate-scripts/route.ts`
+
+---
+
+> ### Target Duration Extended to 10 Clips (71s)
+>
+> - **What changed:** The target duration slider maximum was raised from 36s (5 clips) to 71s (10 clips).
+> - **Why:** Allows longer content sequences with up to 10 independent clips per run.
+> - **Files:**
+>   - `src/app/sandbox/page.tsx`
+
+---
+
+> ### LLM Image Labeling — Interleaved Text Before Each Image
+>
+> - **What changed:** The script generation multimodal message now prepends a text label (`Image id=X — assigned to clip(s): Y`) immediately before each image block in the content array, so the LLM can match pixel content to clip IDs without guessing from a disconnected text block.
+> - **Why:** Previously images were sent as an unlabeled flat array; the LLM had no reliable way to associate a specific image's visual content with the clip numbers that referenced it by UUID.
+> - **Files:**
+>   - `src/app/api/sandbox/generate-scripts/route.ts`
+
+---
+
+> ### Script Panel Reordered: Goal → Images → Generate
+>
+> - **What changed:** The left config panel section order changed to: Goal & Duration (top) → Reference Images (middle) → Generate Script button (bottom). Previously Reference Images appeared before the goal textarea.
+> - **Why:** The goal text (which describes variations) must be written before images are assigned, since variation clip labels only appear after generation. The new order makes the dependency explicit.
+> - **Files:**
+>   - `src/app/sandbox/page.tsx`
+
+---
+
+### 🐛 Fixes
+
+---
+
+> ### Regenerate Syncs Updated Dialogue and Prompt into Clip Card
+>
+> - **What changed:** When a clip's dialogue or visual prompt is edited in the script editor and the clip is regenerated, the sidebar clip card now immediately reflects the new dialogue and visual prompt. `scriptItem` is now read before `generatingSteps` is built in `runStep`, so the updated text is written to Firestore with the `generating` status update rather than being invisible until the video completes. `visualPrompt` was added as a first-class field on `StepSlot` and is displayed below Dialogue in the clip card.
+> - **Why:** Clip cards showed stale dialogue/prompt from the original run creation even after the user had edited the script and clicked Regenerate, making it impossible to verify that the correct text was being sent to Veo.
+> - **Files:**
+>   - `src/app/sandbox/page.tsx`
+
+---
+
+### ⚡ Performance
+
+---
+
+> ### Image Assignment Buttons — Instant Click Response
+>
+> - **What changed:** `updateImageAssignment` now uses a functional state update (`setAvatarImages(prev => ...)`) instead of reading `avatarImages` from the render closure. Both `saveImagesToFirestore` and `updateImageAssignment` are wrapped in `useCallback` with stable deps. The numbered clip buttons use `type="button"` and no longer carry a `transition-colors` CSS animation.
+> - **Why:** Clicking clip number buttons (1–9) felt delayed and sometimes required two clicks. The closure-based update caused rapid clicks to operate on stale state (overwriting the first click's result), while the large component re-render introduced visual latency. Removing `transition-colors` eliminated the additional 150ms color animation on top of the render delay.
+> - **Files:**
+>   - `src/app/sandbox/page.tsx`
+
+---
+
+## 🗓️ **2026-05-12**
 
 ---
 

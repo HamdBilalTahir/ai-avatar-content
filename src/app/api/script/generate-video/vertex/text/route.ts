@@ -24,6 +24,7 @@ export async function POST(req: NextRequest) {
       sandboxId,
       runId,
       stepNumber,
+      isBroll,
     } = await req.json();
 
     const finalPrompt =
@@ -50,7 +51,14 @@ export async function POST(req: NextRequest) {
     const NEGATIVE_PROMPT =
       'slow speech, long pauses, continued talking after dialogue ends, extra lip movement, mumbling, background music, music soundtrack, ambient music';
 
-    const enhancedPrompt = `${finalPrompt}\n\n${VEO_HARDCODED_INJECTIONS}`;
+    const brollPrefix =
+      'No human faces. No people. No human subjects. B-roll footage only.';
+    const promptBase = isBroll
+      ? `${brollPrefix}\n\n${finalPrompt}`
+      : finalPrompt;
+    const enhancedPrompt = `${promptBase}\n\n${VEO_HARDCODED_INJECTIONS}`;
+
+    console.log(`  - Shot Type: ${isBroll ? 'B-roll' : 'A-roll'}`);
 
     const res = await generateVertexText({
       prompt: enhancedPrompt,
@@ -62,6 +70,7 @@ export async function POST(req: NextRequest) {
       vertexKeyJson: vertexKey,
       location: vertexLocation || 'us-central1',
       negativePrompt: NEGATIVE_PROMPT,
+      isBroll: !!isBroll,
     });
 
     if (res?.outputName) {

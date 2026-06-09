@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Upload,
   X,
@@ -33,6 +33,7 @@ import {
   orderBy,
   getDocs,
   onSnapshot,
+  increment,
 } from 'firebase/firestore';
 import { useAuth } from '@/lib/AuthContext';
 import { useProvider } from '@/lib/ProviderContext';
@@ -52,7 +53,9 @@ import { extractAudioLocally } from '@/lib/client-ffmpeg';
 
 export type StepSlot = {
   stepNumber: number;
+  label?: string;
   dialogue: string;
+  visualPrompt?: string;
   status: 'idle' | 'generating' | 'done' | 'error';
   videoUrl?: string;
   errorMsg?: string;
@@ -61,6 +64,7 @@ export type StepSlot = {
   videoReferenceUrl?: string;
   videoVersions?: { version: string; url: string }[];
   activeVersionIndex?: number;
+  costUsd?: number;
 };
 
 type RunRecord = {
@@ -81,6 +85,8 @@ type RunRecord = {
   topicName?: string;
   isExtendEnabled?: boolean;
   stitchedVideoUrl?: string;
+  stitchedVideoUrls?: Record<string, string>;
+  totalCostUsd?: number;
 };
 
 function timeAgo(ms: number): string {
@@ -102,18 +108,144 @@ function modelShortName(m: string): string {
   return m;
 }
 
+// Veo pricing per second of video generated (USD), by resolution.
+// Source: ai.google.dev/gemini-api/docs/pricing — current as of 2026-06-10 (post Apr 7 price cut).
+const VEO_PRICE_PER_SECOND: Record<
+  string,
+  Partial<Record<'720p' | '1080p' | '4k', number>>
+> = {
+  'veo-3.1-lite': { '720p': 0.05, '1080p': 0.08 },
+  'veo-3.1-fast': { '720p': 0.1, '1080p': 0.12, '4k': 0.3 },
+  'veo-3.1-generate': { '720p': 0.4, '1080p': 0.4, '4k': 0.6 },
+};
+
+function clipCostValue(
+  modelName: string,
+  durationSeconds = 8,
+  resolution: '720p' | '1080p' | '4k' = '1080p'
+): number | null {
+  const key = Object.keys(VEO_PRICE_PER_SECOND).find((k) =>
+    modelName.includes(k)
+  );
+  if (!key) return null;
+  const rate =
+    VEO_PRICE_PER_SECOND[key][resolution] ??
+    VEO_PRICE_PER_SECOND[key]['1080p'] ??
+    Object.values(VEO_PRICE_PER_SECOND[key])[0];
+  return rate !== undefined ? rate * durationSeconds : null;
+}
+
+function clipCostUsd(
+  modelName: string,
+  durationSeconds = 8,
+  resolution: '720p' | '1080p' | '4k' = '1080p'
+): string | null {
+  const cost = clipCostValue(modelName, durationSeconds, resolution);
+  return cost !== null ? `~$${cost.toFixed(2)}` : null;
+}
+
+// ─── Variation helpers ────────────────────────────────────────────────────────
+
+function getVariantLetter(label: string | undefined): string | null {
+  if (!label) return null;
+  const m = label.match(/([A-Z]+)$/);
+  return m ? m[1] : null;
+}
+
+function getVariantBase(label: string): string {
+  return label.replace(/[A-Z]+$/, '');
+}
+
+// Returns { A: [url, url, ...], B: [...], C: [...] } or null if no variations
+function buildVariantUrlMap(
+  steps: StepSlot[]
+): Record<string, string[]> | null {
+  const letters = new Set<string>();
+  for (const s of steps) {
+    const l = getVariantLetter(s.label);
+    if (l) letters.add(l);
+  }
+  if (letters.size === 0) return null;
+
+  const result: Record<string, string[]> = {};
+  for (const letter of Array.from(letters).sort()) {
+    result[letter] = steps
+      .filter((s) => {
+        const l = getVariantLetter(s.label);
+        return l === null || l === letter;
+      })
+      .map((s) => s.videoUrl)
+      .filter((url): url is string => !!url);
+  }
+  return result;
+}
+
+type StepRow =
+  | { type: 'single'; step: StepSlot; idx: number }
+  | { type: 'group'; groupBase: string; steps: StepSlot[]; startIdx: number };
+
+function groupStepRows(steps: StepSlot[]): StepRow[] {
+  const rows: StepRow[] = [];
+  let i = 0;
+  while (i < steps.length) {
+    const step = steps[i];
+    const letter = getVariantLetter(step.label);
+    if (letter !== null && step.label) {
+      const base = getVariantBase(step.label);
+      const groupSteps: StepSlot[] = [step];
+      let j = i + 1;
+      while (j < steps.length) {
+        const next = steps[j];
+        if (
+          getVariantLetter(next.label) !== null &&
+          next.label &&
+          getVariantBase(next.label) === base
+        ) {
+          groupSteps.push(next);
+          j++;
+        } else {
+          break;
+        }
+      }
+      if (groupSteps.length > 1) {
+        rows.push({
+          type: 'group',
+          groupBase: base,
+          steps: groupSteps,
+          startIdx: i,
+        });
+        i = j;
+      } else {
+        rows.push({ type: 'single', step, idx: i });
+        i++;
+      }
+    } else {
+      rows.push({ type: 'single', step, idx: i });
+      i++;
+    }
+  }
+  return rows;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 type AvatarImageEntry = {
   id: string;
   file?: File;
   previewUrl: string;
   blobUrl?: string;
   assignedTo: 'all' | number[];
+  isBroll?: boolean;
 };
 
 type ScriptItem = {
   id: number;
+  label?: string;
   text: string;
   visualPrompt?: string;
+  variationGroup?: number;
+  variationNote?: string;
+  isBroll?: boolean;
 };
 
 export default function SandboxPage() {
@@ -155,6 +287,26 @@ export default function SandboxPage() {
 
   const [steps, setSteps] = useState<StepSlot[]>([]);
   const [sandboxId, setSandboxId] = useState<string | null>(null);
+  const [finalEditedVideo, setFinalEditedVideo] = useState<string | null>(null);
+  const [isUploadingFinalVideo, setIsUploadingFinalVideo] = useState(false);
+  const [isPosted, setIsPosted] = useState(false);
+  const [isMarkingPosted, setIsMarkingPosted] = useState(false);
+  const [showImageGen, setShowImageGen] = useState(false);
+  const [imageGenPrompt, setImageGenPrompt] = useState('');
+  const [isGeneratingImage, setIsGeneratingImage] = useState(false);
+  const [imageGenError, setImageGenError] = useState<string | null>(null);
+  const [generatedImagePreview, setGeneratedImagePreview] = useState<{
+    base64: string;
+    mimeType: string;
+    objectUrl: string;
+  } | null>(null);
+  const [imageGenCostUsd, setImageGenCostUsd] = useState(0);
+  const [scriptGenCostUsd, setScriptGenCostUsd] = useState(0);
+  const [imageGenAspectRatio, setImageGenAspectRatio] = useState('1:1');
+  const [imageGenSize, setImageGenSize] = useState('1K');
+  const [imageGenRefImages, setImageGenRefImages] = useState<
+    { data: string; mimeType: string; previewUrl: string }[]
+  >([]);
   const [sandboxes, setSandboxes] = useState<any[]>([]);
   const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(true);
   const [sandboxToDelete, setSandboxToDelete] = useState<{
@@ -261,6 +413,7 @@ export default function SandboxPage() {
                   previewUrl: img.url,
                   blobUrl: img.url,
                   assignedTo: img.assignedTo ?? 'all',
+                  ...(img.isBroll ? { isBroll: true } : {}),
                 }))
               );
             } else if (data.referenceImage) {
@@ -279,7 +432,11 @@ export default function SandboxPage() {
               if (data.config.model) setModel(data.config.model);
               if (data.config.videoQuality)
                 setVideoQuality(data.config.videoQuality);
-              if (data.config.videoCount) {
+              if (data.config.targetDuration) {
+                setTargetDuration(data.config.targetDuration);
+              } else if (data.config.clipCount) {
+                setTargetDuration(8 + (data.config.clipCount - 1) * 7);
+              } else if (data.config.videoCount) {
                 setTargetDuration(8 + (data.config.videoCount - 1) * 7);
               }
               if (data.config.isExtendEnabled !== undefined) {
@@ -295,9 +452,23 @@ export default function SandboxPage() {
                 data.scripts.map((s: any) => ({
                   id: s.id,
                   text: s.text,
+                  ...(s.label ? { label: s.label } : {}),
                   ...(s.visualPrompt ? { visualPrompt: s.visualPrompt } : {}),
+                  ...(s.variationGroup !== undefined
+                    ? { variationGroup: s.variationGroup }
+                    : {}),
+                  ...(s.variationNote
+                    ? { variationNote: s.variationNote }
+                    : {}),
+                  ...(s.isBroll ? { isBroll: true } : {}),
                 }))
               );
+            if (data.finalEditedVideo)
+              setFinalEditedVideo(data.finalEditedVideo);
+            setIsPosted(data.posted === true);
+            if (data.imageGenCostUsd) setImageGenCostUsd(data.imageGenCostUsd);
+            if (data.scriptGenCostUsd)
+              setScriptGenCostUsd(data.scriptGenCostUsd);
           }
         } catch (error) {
           console.error('Failed to fetch sandbox data:', error);
@@ -338,6 +509,7 @@ export default function SandboxPage() {
             topicName: data.topicName ?? '',
             isExtendEnabled: data.isExtendEnabled ?? true,
             stitchedVideoUrl: data.stitchedVideoUrl,
+            totalCostUsd: data.totalCostUsd,
           } as RunRecord;
         });
       setRuns(runDocs);
@@ -517,6 +689,7 @@ export default function SandboxPage() {
   const updateConfigInDb = async (
     updates: Partial<{
       clipCount: number;
+      targetDuration: number;
       aspectRatio: string;
       model: string;
       videoQuality: string;
@@ -592,20 +765,24 @@ export default function SandboxPage() {
     }
   };
 
-  const saveImagesToFirestore = async (images: AvatarImageEntry[]) => {
-    if (!sandboxId) return;
-    await setDoc(
-      doc(collection(db, 'sandbox'), sandboxId),
-      {
-        referenceImages: images.map((img) => ({
-          id: img.id,
-          url: img.blobUrl || img.previewUrl,
-          assignedTo: img.assignedTo,
-        })),
-      },
-      { merge: true }
-    );
-  };
+  const saveImagesToFirestore = useCallback(
+    async (images: AvatarImageEntry[]) => {
+      if (!sandboxId) return;
+      await setDoc(
+        doc(collection(db, 'sandbox'), sandboxId),
+        {
+          referenceImages: images.map((img) => ({
+            id: img.id,
+            url: img.blobUrl || img.previewUrl,
+            assignedTo: img.assignedTo,
+            ...(img.isBroll ? { isBroll: true } : {}),
+          })),
+        },
+        { merge: true }
+      );
+    },
+    [sandboxId]
+  );
 
   const handleAddImage = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files ?? []);
@@ -679,24 +856,43 @@ export default function SandboxPage() {
     }
   };
 
-  const updateImageAssignment = (id: string, assignedTo: 'all' | number[]) => {
-    const updated = avatarImages.map((img) =>
-      img.id === id ? { ...img, assignedTo } : img
-    );
-    setAvatarImages(updated);
-    if (assignmentSaveTimer.current) clearTimeout(assignmentSaveTimer.current);
-    assignmentSaveTimer.current = setTimeout(
-      () => saveImagesToFirestore(updated),
-      800
-    );
-  };
+  const updateImageAssignment = useCallback(
+    (id: string, assignedTo: 'all' | number[]) => {
+      setAvatarImages((prev) => {
+        const updated = prev.map((img) =>
+          img.id === id ? { ...img, assignedTo } : img
+        );
+        if (assignmentSaveTimer.current)
+          clearTimeout(assignmentSaveTimer.current);
+        assignmentSaveTimer.current = setTimeout(
+          () => saveImagesToFirestore(updated),
+          800
+        );
+        return updated;
+      });
+    },
+    [saveImagesToFirestore]
+  );
+
+  const toggleImageBroll = useCallback(
+    (id: string) => {
+      setAvatarImages((prev) => {
+        const updated = prev.map((img) =>
+          img.id === id ? { ...img, isBroll: !img.isBroll } : img
+        );
+        saveImagesToFirestore(updated);
+        return updated;
+      });
+    },
+    [saveImagesToFirestore]
+  );
 
   const canCreate =
     avatarImages.length > 0 &&
     generatedScript !== null &&
     defaultVideoPrompt.trim().length > 0;
 
-  const getEntryBase64 = (
+  const getEntryBase64 = async (
     entry: AvatarImageEntry
   ): Promise<{ base64: string; mimeType: string }> => {
     if (entry.file) {
@@ -727,12 +923,14 @@ export default function SandboxPage() {
   };
 
   const getImagesBase64ForStep = async (
-    stepNumber: number
+    stepNumber: number,
+    isBroll = false
   ): Promise<{ base64: string; mimeType: string }[]> => {
-    const relevant = avatarImages.filter(
-      (img) =>
-        img.assignedTo === 'all' ||
-        (Array.isArray(img.assignedTo) && img.assignedTo.includes(stepNumber))
+    const relevant = avatarImages.filter((img) =>
+      isBroll
+        ? Array.isArray(img.assignedTo) && img.assignedTo.includes(stepNumber)
+        : img.assignedTo === 'all' ||
+          (Array.isArray(img.assignedTo) && img.assignedTo.includes(stepNumber))
     );
     if (relevant.length === 0) {
       return [];
@@ -758,6 +956,208 @@ export default function SandboxPage() {
     return data.url as string;
   };
 
+  const handleGenerateImage = async () => {
+    if (!imageGenPrompt.trim() || !sandboxId) return;
+    console.log(
+      `[ImageGen] Starting generation — prompt="${imageGenPrompt.slice(0, 80)}" sandboxId=${sandboxId}`
+    );
+    setIsGeneratingImage(true);
+    setImageGenError(null);
+    if (generatedImagePreview) {
+      URL.revokeObjectURL(generatedImagePreview.objectUrl);
+      setGeneratedImagePreview(null);
+    }
+    try {
+      const res = await fetch('/api/avatar/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          avatar_prompt: imageGenPrompt,
+          gemini_api_key: providerConfig.geminiApiKey || undefined,
+          aspect_ratio: imageGenAspectRatio,
+          image_size: imageGenSize,
+          ...(imageGenRefImages.length > 0
+            ? {
+                reference_images: imageGenRefImages.map((r) => ({
+                  data: r.data,
+                  mime_type: r.mimeType,
+                })),
+              }
+            : {}),
+        }),
+      });
+      console.log(`[ImageGen] API response status=${res.status} ok=${res.ok}`);
+      if (!res.ok || !res.body) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error ?? 'Image generation failed');
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let eventCount = 0;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+          console.log(
+            `[ImageGen] SSE stream closed — total events received: ${eventCount}`
+          );
+          break;
+        }
+        buffer += decoder.decode(value, { stream: true });
+        const events = buffer.split('\n\n');
+        buffer = events.pop() ?? '';
+        for (const block of events) {
+          const eventMatch = block.match(/^event: (\w+)/m);
+          const dataMatch = block.match(/^data: (.+)$/m);
+          if (!eventMatch || !dataMatch) continue;
+          const event = eventMatch[1];
+          eventCount++;
+          console.log(`[ImageGen] SSE event="${event}" (#${eventCount})`);
+          const payload = JSON.parse(dataMatch[1]);
+          if (event === 'result') {
+            const {
+              image_base64,
+              mime_type,
+              costUsd: actualCost,
+              promptTokens,
+              imageOutputTokens,
+              textOutputTokens,
+            } = payload as {
+              image_base64: string;
+              mime_type: string;
+              costUsd?: number;
+              promptTokens?: number;
+              imageOutputTokens?: number;
+              textOutputTokens?: number;
+            };
+            console.log(
+              `[ImageGen] ✅ Result received — mime=${mime_type} base64Len=${image_base64?.length ?? 0} promptTokens=${promptTokens} imageOutTokens=${imageOutputTokens} textOutTokens=${textOutputTokens} costUsd=$${(actualCost ?? 0).toFixed(5)}`
+            );
+            const byteArr = Uint8Array.from(atob(image_base64), (c) =>
+              c.charCodeAt(0)
+            );
+            const blob = new Blob([byteArr], { type: mime_type });
+            const objectUrl = URL.createObjectURL(blob);
+            setGeneratedImagePreview({
+              base64: image_base64,
+              mimeType: mime_type,
+              objectUrl,
+            });
+            const thisCost = actualCost ?? 0;
+            const newCost = imageGenCostUsd + thisCost;
+            setImageGenCostUsd(newCost);
+            console.log(
+              `[ImageGen] Cost tracked — this attempt=$${thisCost.toFixed(5)} running total=$${newCost.toFixed(5)}`
+            );
+            await setDoc(
+              doc(collection(db, 'sandbox'), sandboxId),
+              { imageGenCostUsd: increment(thisCost) },
+              { merge: true }
+            );
+            console.log(`[ImageGen] Firestore imageGenCostUsd incremented`);
+          } else if (event === 'error') {
+            console.error(`[ImageGen] ❌ Server error event:`, payload);
+            throw new Error(payload.error ?? 'Image generation failed');
+          } else {
+            console.log(`[ImageGen] Skipping event="${event}"`);
+          }
+        }
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`[ImageGen] ❌ Failed:`, msg);
+      setImageGenError(msg);
+    } finally {
+      setIsGeneratingImage(false);
+      console.log(`[ImageGen] Generation complete`);
+    }
+  };
+
+  const handleUseGeneratedImage = async () => {
+    if (!generatedImagePreview || !sandboxId) return;
+    const { mimeType, objectUrl } = generatedImagePreview;
+    const ext = mimeType.split('/')[1] || 'png';
+    const id = crypto.randomUUID();
+    console.log(`[ImageGen] Adding to references — id=${id} mime=${mimeType}`);
+    const entry: AvatarImageEntry = {
+      id,
+      previewUrl: objectUrl,
+      assignedTo: 'all',
+    };
+    const updated = [...avatarImages, entry];
+    setAvatarImages(updated);
+    setGeneratedImagePreview(null);
+    setShowImageGen(false);
+    try {
+      const byteArr = Uint8Array.from(atob(generatedImagePreview.base64), (c) =>
+        c.charCodeAt(0)
+      );
+      const blob = new Blob([byteArr], { type: mimeType });
+      const blobUrl = await uploadToVercelBlob(
+        blob,
+        `sandbox/${sandboxId}/avatar_${id}.${ext}`
+      );
+      console.log(`[ImageGen] ✅ Uploaded to Vercel Blob — url=${blobUrl}`);
+      const withUrl = updated.map((img) =>
+        img.id === id ? { ...img, blobUrl } : img
+      );
+      setAvatarImages(withUrl);
+      await saveImagesToFirestore(withUrl);
+      console.log(`[ImageGen] Firestore reference images updated`);
+    } catch (err) {
+      console.error(
+        '[ImageGen] ❌ Failed to upload generated image to blob:',
+        err
+      );
+    }
+  };
+
+  const handleMarkPosted = async () => {
+    if (!sandboxId) return;
+    setIsMarkingPosted(true);
+    try {
+      await setDoc(
+        doc(collection(db, 'sandbox'), sandboxId),
+        { posted: true, postedAt: serverTimestamp() },
+        { merge: true }
+      );
+      setIsPosted(true);
+    } catch (err) {
+      console.error('Failed to mark as posted', err);
+      alert(
+        'Failed to mark as posted: ' +
+          (err instanceof Error ? err.message : 'unknown error')
+      );
+    } finally {
+      setIsMarkingPosted(false);
+    }
+  };
+
+  const handleUploadFinalVideo = async (file: File) => {
+    if (!sandboxId) return;
+    setIsUploadingFinalVideo(true);
+    try {
+      const url = await uploadToVercelBlob(
+        file,
+        `sandbox/${sandboxId}/final_edited/${file.name}`
+      );
+      setFinalEditedVideo(url);
+      await setDoc(
+        doc(collection(db, 'sandbox'), sandboxId),
+        { finalEditedVideo: url, finalEditedVideoUpdatedAt: serverTimestamp() },
+        { merge: true }
+      );
+    } catch (err) {
+      console.error('Failed to upload final video', err);
+      alert(
+        'Upload failed: ' +
+          (err instanceof Error ? err.message : 'unknown error')
+      );
+    } finally {
+      setIsUploadingFinalVideo(false);
+    }
+  };
+
   // Helper to run a step
   const runStep = async (
     stepNumber: number,
@@ -771,11 +1171,20 @@ export default function SandboxPage() {
     // We treat it as an initial generation if it's step 1 OR if extend is disabled
     const isInitialGeneration = stepNumber === 1 || !useExtendAPI;
 
-    // Update local state and firestore to generating
+    // Read fresh script values before building the step update
+    const scriptItem = generatedScript?.[stepNumber - 1];
+    const scriptText = scriptItem?.text?.trim() || '';
+    const clipVisualPrompt = scriptItem?.visualPrompt?.trim() || '';
+    const isBroll = scriptItem?.isBroll === true;
+
+    // Update local state and firestore to generating, syncing latest dialogue/prompt
     const generatingSteps = currentSteps.map((s) => {
       const step = { ...s };
       if (step.stepNumber === stepNumber) {
         step.status = 'generating' as const;
+        if (scriptText) step.dialogue = scriptText;
+        if (clipVisualPrompt) step.visualPrompt = clipVisualPrompt;
+        else delete (step as any).visualPrompt;
         delete step.errorMsg; // remove instead of setting to undefined
       }
       return step;
@@ -791,17 +1200,20 @@ export default function SandboxPage() {
     );
 
     try {
-      const scriptItem = generatedScript?.[stepNumber - 1];
-      const scriptText = scriptItem?.text?.trim() || '';
-      const clipVisualPrompt = scriptItem?.visualPrompt?.trim() || '';
-      const finalPrompt = [defaultVideoPrompt, clipVisualPrompt, scriptText]
-        .filter(Boolean)
-        .join('\n\n');
+      const BROLL_NO_FACES =
+        'No human faces. No people. No human subjects. No bodies. No skin. Strictly B-roll footage only — environmental, product, or abstract visuals only.';
+      const finalPrompt = isBroll
+        ? [BROLL_NO_FACES, defaultVideoPrompt, clipVisualPrompt]
+            .filter(Boolean)
+            .join('\n\n')
+        : [defaultVideoPrompt, clipVisualPrompt, scriptText]
+            .filter(Boolean)
+            .join('\n\n');
       let finalBlobUrl = '';
       let stepRefUrl = undefined;
 
       if (isInitialGeneration) {
-        const imgDataArr = await getImagesBase64ForStep(stepNumber);
+        const imgDataArr = await getImagesBase64ForStep(stepNumber, isBroll);
         const hasImages = imgDataArr.length > 0;
 
         const endpoint = hasImages
@@ -813,7 +1225,7 @@ export default function SandboxPage() {
             : '/api/script/generate-video/text';
 
         console.log(
-          `[Sandbox] Step ${stepNumber}: Calling ${hasImages ? 'Image-Refs' : 'Text'} API (${endpoint})`
+          `[Sandbox] Step ${stepNumber}: Calling ${hasImages ? 'Image-Refs' : 'Text'} API (${endpoint}) [${isBroll ? 'B-roll' : 'A-roll'}]`
         );
 
         const payload = hasImages
@@ -831,6 +1243,7 @@ export default function SandboxPage() {
               sandboxId,
               runId,
               stepNumber,
+              isBroll,
               apiKey: providerConfig.geminiApiKey,
               ...(providerStr === 'vertex' && {
                 vertexKey: providerConfig.vertexCredentials.serviceAccountKey,
@@ -847,6 +1260,7 @@ export default function SandboxPage() {
               sandboxId,
               runId,
               stepNumber,
+              isBroll,
               apiKey: providerConfig.geminiApiKey,
               ...(providerStr === 'vertex' && {
                 vertexKey: providerConfig.vertexCredentials.serviceAccountKey,
@@ -982,6 +1396,7 @@ export default function SandboxPage() {
             { version: newVersionString, url: finalBlobUrl },
           ];
 
+          const costUsd = clipCostValue(model, 8, videoQuality);
           return {
             ...s,
             status: 'done' as const,
@@ -991,12 +1406,27 @@ export default function SandboxPage() {
             cumulativeDuration: dur,
             videoVersions: newVersions,
             activeVersionIndex: newVersions.length - 1,
+            ...(costUsd !== null ? { costUsd } : {}),
           };
         }
         return s;
       });
 
       setSteps(doneSteps);
+
+      // Persist done step and accumulate cost — runs on every completion including retries
+      const stepCost = doneSteps.find(
+        (s) => s.stepNumber === stepNumber
+      )?.costUsd;
+      await setDoc(
+        doc(collection(db, 'sandbox', sandboxId, 'generatedVideos'), runId),
+        {
+          steps: doneSteps,
+          updatedAt: serverTimestamp(),
+          ...(stepCost ? { totalCostUsd: increment(stepCost) } : {}),
+        },
+        { merge: true }
+      );
 
       return doneSteps;
     } catch (error: any) {
@@ -1056,7 +1486,9 @@ export default function SandboxPage() {
         length: numberOfVideos,
       }).map((_, i) => ({
         stepNumber: i + 1,
+        label: generatedScript?.[i]?.label,
         dialogue: generatedScript?.[i]?.text || '',
+        visualPrompt: generatedScript?.[i]?.visualPrompt || undefined,
         status: 'idle',
       }));
       setSteps(initialSteps);
@@ -1102,56 +1534,73 @@ export default function SandboxPage() {
           currentStepsState,
           isExtendEnabled
         );
-        const justFinished = currentStepsState.find((s) => s.stepNumber === i);
-        if (justFinished?.status === 'error') {
-          setIsCreatingVideos(false);
-          return; // Stop the chain
-        }
       }
 
-      // If extend is disabled, we need to stitch the clips together
+      // Stitch clips into final video(s)
       let stitchedVideoUrl: string | undefined = undefined;
+      let stitchedVideoUrls: Record<string, string> | undefined = undefined;
       if (!isExtendEnabled && numberOfVideos > 1) {
         try {
-          const videoUrls = currentStepsState
+          const allUrls = currentStepsState
             .map((s) => s.videoUrl)
             .filter((url): url is string => !!url);
 
-          console.log(
-            `[Stitch:auto] videoUrls collected: ${videoUrls.length} / ${numberOfVideos}`
-          );
-          if (videoUrls.length === numberOfVideos) {
-            videoUrls.forEach((u, i) =>
-              console.log(`[Stitch:auto]   clip[${i}]: ${u}`)
-            );
-            console.log(
-              `[Stitch:auto] Calling /api/sandbox/stitch for run ${runId}…`
-            );
-            const stitchRes = await fetch('/api/sandbox/stitch', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                videoUrls,
-                filename: `stitched_${sandboxId}_${runId}.mp4`,
-              }),
-            });
-            if (stitchRes.ok) {
-              const stitchData = await stitchRes.json();
-              stitchedVideoUrl = stitchData.videoUrl;
-              console.log(
-                '[Stitch:auto] DONE — stitchedVideoUrl:',
-                stitchedVideoUrl
-              );
+          if (allUrls.length === numberOfVideos) {
+            const variantMap = buildVariantUrlMap(currentStepsState);
+            if (variantMap) {
+              // Variation run: stitch one final per variant letter
+              stitchedVideoUrls = {};
+              for (const [letter, urls] of Object.entries(variantMap)) {
+                if (urls.length < 2) continue;
+                console.log(
+                  `[Stitch:auto] Stitching Final ${letter} (${urls.length} clips)…`
+                );
+                const res = await fetch('/api/sandbox/stitch', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    videoUrls: urls,
+                    filename: `stitched_${sandboxId}_${runId}_${letter}.mp4`,
+                  }),
+                });
+                if (res.ok) {
+                  const data = await res.json();
+                  stitchedVideoUrls[letter] = data.videoUrl;
+                  console.log(
+                    `[Stitch:auto] Final ${letter} done:`,
+                    data.videoUrl
+                  );
+                } else {
+                  console.error(
+                    `[Stitch:auto] Final ${letter} failed:`,
+                    res.status
+                  );
+                }
+              }
             } else {
-              const errText = await stitchRes.text();
-              console.error(
-                `[Stitch:auto] API error ${stitchRes.status}:`,
-                errText
+              // No variations: single stitch
+              console.log(
+                `[Stitch:auto] Stitching single final (${allUrls.length} clips)…`
               );
+              const stitchRes = await fetch('/api/sandbox/stitch', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  videoUrls: allUrls,
+                  filename: `stitched_${sandboxId}_${runId}.mp4`,
+                }),
+              });
+              if (stitchRes.ok) {
+                const stitchData = await stitchRes.json();
+                stitchedVideoUrl = stitchData.videoUrl;
+                console.log('[Stitch:auto] DONE —', stitchedVideoUrl);
+              } else {
+                console.error(`[Stitch:auto] API error ${stitchRes.status}`);
+              }
             }
           } else {
             console.warn(
-              `[Stitch:auto] Skipped — only ${videoUrls.length} of ${numberOfVideos} clip URLs available`
+              `[Stitch:auto] Skipped — only ${allUrls.length} of ${numberOfVideos} clip URLs available`
             );
           }
         } catch (e) {
@@ -1165,6 +1614,7 @@ export default function SandboxPage() {
           status: 'done',
           updatedAt: serverTimestamp(),
           ...(stitchedVideoUrl ? { stitchedVideoUrl } : {}),
+          ...(stitchedVideoUrls ? { stitchedVideoUrls } : {}),
         },
         { merge: true }
       );
@@ -1239,29 +1689,57 @@ export default function SandboxPage() {
       if (justFinished?.status !== 'error') {
         // Restitch videos
         try {
-          const videoUrls = currentStepsState
+          const allUrls = currentStepsState
             .map((s) => s.videoUrl)
             .filter((url): url is string => !!url);
 
-          if (videoUrls.length === numberOfVideos) {
-            const stitchRes = await fetch('/api/sandbox/stitch', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                videoUrls,
-                filename: `stitched_${sandboxId}_${currentRunId}.mp4`,
-              }),
-            });
-            if (stitchRes.ok) {
-              const stitchData = await stitchRes.json();
+          if (allUrls.length === numberOfVideos) {
+            const variantMap = buildVariantUrlMap(currentStepsState);
+            if (variantMap) {
+              const stitchedVideoUrls: Record<string, string> = {};
+              for (const [letter, urls] of Object.entries(variantMap)) {
+                if (urls.length < 2) continue;
+                const res = await fetch('/api/sandbox/stitch', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    videoUrls: urls,
+                    filename: `stitched_${sandboxId}_${currentRunId}_${letter}.mp4`,
+                  }),
+                });
+                if (res.ok) {
+                  const data = await res.json();
+                  stitchedVideoUrls[letter] = data.videoUrl;
+                }
+              }
               await setDoc(
                 doc(
                   collection(db, 'sandbox', sandboxId, 'generatedVideos'),
                   currentRunId
                 ),
-                { stitchedVideoUrl: stitchData.videoUrl },
+                { stitchedVideoUrls },
                 { merge: true }
               );
+            } else {
+              const stitchRes = await fetch('/api/sandbox/stitch', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  videoUrls: allUrls,
+                  filename: `stitched_${sandboxId}_${currentRunId}.mp4`,
+                }),
+              });
+              if (stitchRes.ok) {
+                const stitchData = await stitchRes.json();
+                await setDoc(
+                  doc(
+                    collection(db, 'sandbox', sandboxId, 'generatedVideos'),
+                    currentRunId
+                  ),
+                  { stitchedVideoUrl: stitchData.videoUrl },
+                  { merge: true }
+                );
+              }
             }
           }
         } catch (e) {
@@ -1285,6 +1763,8 @@ export default function SandboxPage() {
     }
 
     setIsCreatingVideos(false);
+    // Refresh runs so the cost banner reflects the newly incremented totalCostUsd
+    if (sandboxId) await loadRunsForSandbox(sandboxId);
   };
 
   const handleChangeStepVersion = async (
@@ -1423,11 +1903,21 @@ export default function SandboxPage() {
         setIsAiGeneratedPrompt(true);
         localStorage.setItem('sandbox_default_prompt', data.videoPrompt);
         if (sandboxId) {
+          const scriptCost =
+            typeof data.scriptCostUsd === 'number' ? data.scriptCostUsd : 0;
           await setDoc(
             doc(collection(db, 'sandbox'), sandboxId),
-            { defaultVideoPrompt: data.videoPrompt },
+            {
+              defaultVideoPrompt: data.videoPrompt,
+              ...(scriptCost > 0
+                ? { scriptGenCostUsd: increment(scriptCost) }
+                : {}),
+            },
             { merge: true }
           );
+          if (scriptCost > 0) {
+            setScriptGenCostUsd((prev) => prev + scriptCost);
+          }
         }
       }
     } catch (error) {
@@ -1479,6 +1969,7 @@ export default function SandboxPage() {
                   id: img.id,
                   base64: data.base64,
                   mimeType: data.mimeType,
+                  isBroll: img.isBroll ?? false,
                 };
               }),
             };
@@ -1523,27 +2014,54 @@ export default function SandboxPage() {
       }
 
       const data = await response.json();
-      if (data.dialogues && Array.isArray(data.dialogues)) {
-        // Merge clipPrompts into script items
-        const clipPromptsMap: Record<number, string> = {};
-        if (data.clipPrompts && Array.isArray(data.clipPrompts)) {
-          for (const cp of data.clipPrompts as {
-            clipId: number;
-            prompt: string;
-          }[]) {
-            if (cp.prompt) clipPromptsMap[cp.clipId] = cp.prompt;
-          }
-        }
+      if (
+        (data.clips && Array.isArray(data.clips)) ||
+        (data.dialogues && Array.isArray(data.dialogues))
+      ) {
+        let newScripts: ScriptItem[];
 
-        const newScripts: ScriptItem[] = data.dialogues.map(
-          (text: string, idx: number) => ({
+        if (data.clips && Array.isArray(data.clips)) {
+          newScripts = (
+            data.clips as {
+              clipLabel: string;
+              dialogue: string;
+              clipPrompt?: string;
+              variationGroup?: number;
+              variationNote?: string;
+              isBroll?: boolean;
+            }[]
+          ).map((clip, idx) => ({
+            id: idx + 1,
+            label: clip.clipLabel,
+            text: clip.dialogue,
+            ...(clip.clipPrompt ? { visualPrompt: clip.clipPrompt } : {}),
+            ...(clip.variationGroup !== undefined
+              ? { variationGroup: clip.variationGroup }
+              : {}),
+            ...(clip.variationNote
+              ? { variationNote: clip.variationNote }
+              : {}),
+            ...(clip.isBroll ? { isBroll: true } : {}),
+          }));
+        } else {
+          // Legacy path: dialogues[] + clipPrompts[]
+          const clipPromptsMap: Record<number, string> = {};
+          if (data.clipPrompts && Array.isArray(data.clipPrompts)) {
+            for (const cp of data.clipPrompts as {
+              clipId: number;
+              prompt: string;
+            }[]) {
+              if (cp.prompt) clipPromptsMap[cp.clipId] = cp.prompt;
+            }
+          }
+          newScripts = (data.dialogues as string[]).map((text, idx) => ({
             id: idx + 1,
             text,
             ...(clipPromptsMap[idx + 1]
               ? { visualPrompt: clipPromptsMap[idx + 1] }
               : {}),
-          })
-        );
+          }));
+        }
         setGeneratedScript(newScripts);
         if (data.topicName) {
           setTopicName(data.topicName);
@@ -1555,6 +2073,8 @@ export default function SandboxPage() {
         }
 
         if (sandboxId) {
+          const scriptCost =
+            typeof data.scriptCostUsd === 'number' ? data.scriptCostUsd : 0;
           await setDoc(
             doc(collection(db, 'sandbox'), sandboxId),
             {
@@ -1564,9 +2084,18 @@ export default function SandboxPage() {
               ...(data.videoPrompt
                 ? { defaultVideoPrompt: data.videoPrompt }
                 : {}),
+              ...(scriptCost > 0
+                ? { scriptGenCostUsd: increment(scriptCost) }
+                : {}),
             },
             { merge: true }
           );
+          if (scriptCost > 0) {
+            setScriptGenCostUsd((prev) => prev + scriptCost);
+            console.log(
+              `[ScriptGen] Cost tracked — this call=$${scriptCost.toFixed(6)} running total=$${(scriptGenCostUsd + scriptCost).toFixed(6)}`
+            );
+          }
         }
       } else {
         throw new Error(
@@ -1609,7 +2138,10 @@ export default function SandboxPage() {
     if (sandboxId) {
       setDoc(
         doc(collection(db, 'sandbox'), sandboxId),
-        { scripts: resequenced, config: { clipCount: newCount } },
+        {
+          scripts: resequenced,
+          config: { clipCount: newCount, targetDuration: newDuration },
+        },
         { merge: true }
       );
       saveImagesToFirestore(remappedImages);
@@ -1624,10 +2156,12 @@ export default function SandboxPage() {
       const script = generatedScript[clipIndex];
       const clipId = script.id;
 
-      const imgsForClip = avatarImages.filter(
-        (img) =>
-          img.assignedTo === 'all' ||
-          (Array.isArray(img.assignedTo) && img.assignedTo.includes(clipId))
+      const isClipBroll = script.isBroll === true;
+      const imgsForClip = avatarImages.filter((img) =>
+        isClipBroll
+          ? Array.isArray(img.assignedTo) && img.assignedTo.includes(clipId)
+          : img.assignedTo === 'all' ||
+            (Array.isArray(img.assignedTo) && img.assignedTo.includes(clipId))
       );
 
       const clipImagesBase64 = await Promise.all(
@@ -1655,6 +2189,7 @@ export default function SandboxPage() {
           goalText: goalText.trim(),
           commonRules: filmDirectionSystem,
           commonVideoPrompt: defaultVideoPrompt,
+          isBroll: isClipBroll,
           styles: filmDirectionSections,
           selectionContext,
         }),
@@ -1828,6 +2363,87 @@ export default function SandboxPage() {
               <>
                 {/* Left Column: Controls */}
                 <div className="h-full min-h-0 overflow-y-auto p-6 bg-slate-50/50 flex flex-col gap-6">
+                  {/* Goal & Duration */}
+                  <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex flex-col shrink-0">
+                    <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
+                      <div className="flex items-center gap-2">
+                        <FileText className="w-5 h-5 text-violet-500" />
+                        <h2 className="font-semibold text-slate-800">
+                          Goal & Duration
+                        </h2>
+                      </div>
+                    </div>
+                    <div className="p-4 flex flex-col gap-5">
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between">
+                          <Label className="text-sm font-medium text-slate-700">
+                            Target Duration
+                          </Label>
+                          <span className="text-sm font-medium text-violet-600 bg-violet-50 px-2 py-0.5 rounded-full">
+                            {targetDuration}s
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-4">
+                          <input
+                            type="range"
+                            min="8"
+                            max="71"
+                            step="7"
+                            value={targetDuration}
+                            onChange={(e) => {
+                              const val = parseInt(e.target.value, 10);
+                              const newCount = 1 + Math.floor((val - 8) / 7);
+                              setTargetDuration(val);
+                              updateConfigInDb({
+                                clipCount: newCount,
+                                targetDuration: val,
+                              });
+                              // Add empty clips if script exists and slider increased
+                              if (
+                                generatedScript &&
+                                newCount > generatedScript.length
+                              ) {
+                                const extra: ScriptItem[] = Array.from(
+                                  { length: newCount - generatedScript.length },
+                                  (_, i) => ({
+                                    id: generatedScript.length + i + 1,
+                                    text: '',
+                                  })
+                                );
+                                const updated = [...generatedScript, ...extra];
+                                setGeneratedScript(updated);
+                                if (sandboxId) {
+                                  setDoc(
+                                    doc(collection(db, 'sandbox'), sandboxId),
+                                    { scripts: updated },
+                                    { merge: true }
+                                  );
+                                }
+                              }
+                            }}
+                            className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-violet-600"
+                          />
+                        </div>
+                        <p className="text-xs text-slate-500 mt-1">
+                          Generates exactly {clipCount} clips ({targetDuration}s
+                          total)
+                        </p>
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label className="text-sm font-medium text-slate-700">
+                          Goal / Topic
+                        </Label>
+                        <Textarea
+                          placeholder="e.g. Create a series of promotional videos for our new AI product."
+                          value={goalText}
+                          onChange={(e) => setGoalText(e.target.value)}
+                          className="min-h-[80px] resize-y"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
                   <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex flex-col shrink-0">
                     <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
                       <div className="flex items-center gap-2">
@@ -1836,11 +2452,188 @@ export default function SandboxPage() {
                           Reference Images
                         </h2>
                       </div>
-                      <span className="text-xs text-slate-500">
-                        {avatarImages.length} image
-                        {avatarImages.length !== 1 ? 's' : ''}
-                      </span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-slate-500">
+                          {avatarImages.length} image
+                          {avatarImages.length !== 1 ? 's' : ''}
+                        </span>
+                        <button
+                          onClick={() => {
+                            setShowImageGen((v) => !v);
+                            setImageGenError(null);
+                          }}
+                          className={cn(
+                            'text-xs px-2.5 py-1 rounded-full border transition-colors',
+                            showImageGen
+                              ? 'bg-violet-600 text-white border-violet-600'
+                              : 'bg-white text-slate-600 border-slate-300 hover:border-violet-400'
+                          )}
+                        >
+                          Generate
+                        </button>
+                      </div>
                     </div>
+                    {showImageGen && (
+                      <div className="px-4 pt-4 pb-3 flex flex-col gap-3 border-b border-slate-100">
+                        <textarea
+                          value={imageGenPrompt}
+                          onChange={(e) => setImageGenPrompt(e.target.value)}
+                          placeholder="Describe the image to generate…"
+                          rows={3}
+                          className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 resize-none focus:outline-none focus:ring-1 focus:ring-violet-500 focus:border-violet-500"
+                        />
+                        <div className="flex gap-2">
+                          <select
+                            value={imageGenAspectRatio}
+                            onChange={(e) =>
+                              setImageGenAspectRatio(e.target.value)
+                            }
+                            className="flex-1 text-xs border border-slate-200 rounded-lg px-2 py-1.5 bg-white focus:outline-none focus:ring-1 focus:ring-violet-500"
+                          >
+                            <option value="9:16">9:16 — Portrait</option>
+                            <option value="1:1">1:1 — Square</option>
+                            <option value="16:9">16:9 — Landscape</option>
+                            <option value="4:3">4:3 — Standard</option>
+                            <option value="3:4">3:4 — Portrait wide</option>
+                          </select>
+                          <select
+                            value={imageGenSize}
+                            onChange={(e) => setImageGenSize(e.target.value)}
+                            className="flex-1 text-xs border border-slate-200 rounded-lg px-2 py-1.5 bg-white focus:outline-none focus:ring-1 focus:ring-violet-500"
+                          >
+                            <option value="1K">1K — Standard</option>
+                            <option value="2K">2K — HD</option>
+                            <option value="4K">4K — Ultra HD</option>
+                          </select>
+                        </div>
+                        {/* Guiding images */}
+                        <div className="flex flex-col gap-1.5">
+                          <div className="flex items-center gap-2">
+                            {imageGenRefImages.map((ref, i) => (
+                              <div key={i} className="relative shrink-0">
+                                {/* eslint-disable-next-line @next/next/no-img-element */}
+                                <img
+                                  src={ref.previewUrl}
+                                  alt={`Guide ${i + 1}`}
+                                  className="w-12 h-12 object-cover rounded-lg border border-slate-200"
+                                />
+                                <button
+                                  onClick={() =>
+                                    setImageGenRefImages((prev) =>
+                                      prev.filter((_, idx) => idx !== i)
+                                    )
+                                  }
+                                  className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-red-500 text-white flex items-center justify-center text-[10px] leading-none"
+                                >
+                                  ×
+                                </button>
+                              </div>
+                            ))}
+                            {imageGenRefImages.length < 3 && (
+                              <label className="w-12 h-12 rounded-lg border-2 border-dashed border-slate-200 flex items-center justify-center cursor-pointer hover:border-violet-400 transition-colors shrink-0">
+                                <ImageIcon className="w-4 h-4 text-slate-400" />
+                                <input
+                                  type="file"
+                                  accept="image/*"
+                                  multiple
+                                  className="hidden"
+                                  onChange={async (e) => {
+                                    const files = Array.from(
+                                      e.target.files ?? []
+                                    ).slice(0, 3 - imageGenRefImages.length);
+                                    e.target.value = '';
+                                    const loaded = await Promise.all(
+                                      files.map(
+                                        (file) =>
+                                          new Promise<{
+                                            data: string;
+                                            mimeType: string;
+                                            previewUrl: string;
+                                          }>((resolve) => {
+                                            const reader = new FileReader();
+                                            reader.onload = () => {
+                                              const dataUrl =
+                                                reader.result as string;
+                                              const base64 =
+                                                dataUrl.split(',')[1];
+                                              resolve({
+                                                data: base64,
+                                                mimeType: file.type,
+                                                previewUrl:
+                                                  URL.createObjectURL(file),
+                                              });
+                                            };
+                                            reader.readAsDataURL(file);
+                                          })
+                                      )
+                                    );
+                                    setImageGenRefImages((prev) =>
+                                      [...prev, ...loaded].slice(0, 3)
+                                    );
+                                  }}
+                                />
+                              </label>
+                            )}
+                            <span className="text-xs text-slate-400">
+                              {imageGenRefImages.length === 0
+                                ? 'Add up to 3 guiding images'
+                                : `${imageGenRefImages.length}/3 guide${imageGenRefImages.length !== 1 ? 's' : ''}`}
+                            </span>
+                          </div>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <div className="flex flex-col gap-0.5">
+                            <span className="text-xs text-slate-400">
+                              Cost tracked per attempt
+                            </span>
+                            {imageGenCostUsd > 0 && (
+                              <span className="text-xs text-amber-600 font-medium">
+                                Spent so far: ${imageGenCostUsd.toFixed(2)}
+                              </span>
+                            )}
+                          </div>
+                          <button
+                            onClick={handleGenerateImage}
+                            disabled={
+                              isGeneratingImage || !imageGenPrompt.trim()
+                            }
+                            className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg bg-violet-600 hover:bg-violet-700 disabled:opacity-50 text-white font-medium transition-colors"
+                          >
+                            {isGeneratingImage ? (
+                              <>
+                                <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                                Generating…
+                              </>
+                            ) : generatedImagePreview ? (
+                              'Regenerate'
+                            ) : (
+                              'Generate'
+                            )}
+                          </button>
+                        </div>
+                        {imageGenError && (
+                          <p className="text-xs text-red-500">
+                            {imageGenError}
+                          </p>
+                        )}
+                        {generatedImagePreview && (
+                          <div className="flex flex-col gap-2">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img
+                              src={generatedImagePreview.objectUrl}
+                              alt="Generated preview"
+                              className="w-full rounded-lg border border-slate-200 object-cover"
+                            />
+                            <button
+                              onClick={handleUseGeneratedImage}
+                              className="w-full text-xs py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-medium transition-colors"
+                            >
+                              Add to References
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
                     <div className="p-4 flex flex-col gap-3">
                       {avatarImages.map((img) => (
                         <div
@@ -1892,6 +2685,7 @@ export default function SandboxPage() {
                             <div className="flex-1 min-w-0 flex flex-col gap-2">
                               <div className="flex items-center gap-2">
                                 <button
+                                  type="button"
                                   className={cn(
                                     'text-xs px-2.5 py-1 rounded-full border transition-colors',
                                     img.assignedTo === 'all'
@@ -1905,6 +2699,7 @@ export default function SandboxPage() {
                                   All clips
                                 </button>
                                 <button
+                                  type="button"
                                   className={cn(
                                     'text-xs px-2.5 py-1 rounded-full border transition-colors',
                                     Array.isArray(img.assignedTo)
@@ -1923,7 +2718,72 @@ export default function SandboxPage() {
                                   Select clips
                                 </button>
                                 <button
-                                  className="ml-auto text-slate-400 hover:text-red-500 transition-colors"
+                                  type="button"
+                                  title="Mark as B-roll: no person will be generated for clips using this image"
+                                  className={cn(
+                                    'text-xs px-2.5 py-1 rounded-full border transition-colors',
+                                    img.isBroll
+                                      ? 'bg-slate-700 text-white border-slate-700'
+                                      : 'bg-white text-slate-500 border-slate-300 hover:border-slate-500'
+                                  )}
+                                  onClick={() => toggleImageBroll(img.id)}
+                                >
+                                  B-roll
+                                </button>
+                                <button
+                                  className="ml-auto text-slate-400 hover:text-violet-500 transition-colors"
+                                  title="Download"
+                                  onClick={async () => {
+                                    const url = img.blobUrl || img.previewUrl;
+                                    const ext =
+                                      img.blobUrl
+                                        ?.split('.')
+                                        .pop()
+                                        ?.split('?')[0] ?? 'png';
+                                    const suggestedName = `reference_${img.id}.${ext}`;
+                                    try {
+                                      const response = await fetch(url);
+                                      const blob = await response.blob();
+                                      if ('showSaveFilePicker' in window) {
+                                        const fileHandle = await (
+                                          window as any
+                                        ).showSaveFilePicker({
+                                          suggestedName,
+                                          types: [
+                                            {
+                                              description: 'Image',
+                                              accept: {
+                                                'image/*': [
+                                                  '.png',
+                                                  '.jpg',
+                                                  '.jpeg',
+                                                  '.webp',
+                                                ],
+                                              },
+                                            },
+                                          ],
+                                        });
+                                        const writable =
+                                          await fileHandle.createWritable();
+                                        await writable.write(blob);
+                                        await writable.close();
+                                      } else {
+                                        const a = document.createElement('a');
+                                        a.href = URL.createObjectURL(blob);
+                                        a.download = suggestedName;
+                                        a.click();
+                                        URL.revokeObjectURL(a.href);
+                                      }
+                                    } catch (err: any) {
+                                      if (err?.name !== 'AbortError')
+                                        console.error('Download failed', err);
+                                    }
+                                  }}
+                                >
+                                  <Download className="w-4 h-4" />
+                                </button>
+                                <button
+                                  className="text-slate-400 hover:text-red-500 transition-colors"
                                   onClick={() => removeAvatarImage(img.id)}
                                 >
                                   <X className="w-4 h-4" />
@@ -1934,29 +2794,43 @@ export default function SandboxPage() {
                                   {Array.from(
                                     { length: clipCount },
                                     (_, i) => i + 1
-                                  ).map((n) => (
-                                    <button
-                                      key={n}
-                                      className={cn(
-                                        'w-7 h-7 rounded-md text-xs font-medium border transition-colors',
-                                        (img.assignedTo as number[]).includes(n)
-                                          ? 'bg-violet-600 text-white border-violet-600'
-                                          : 'bg-white text-slate-600 border-slate-300 hover:border-violet-400'
-                                      )}
-                                      onClick={() => {
-                                        const cur = img.assignedTo as number[];
-                                        const next = cur.includes(n)
-                                          ? cur.filter((x) => x !== n)
-                                          : [...cur, n].sort((a, b) => a - b);
-                                        updateImageAssignment(
-                                          img.id,
-                                          next.length === 0 ? [n] : next
-                                        );
-                                      }}
-                                    >
-                                      {n}
-                                    </button>
-                                  ))}
+                                  ).map((n) => {
+                                    const clipLabel =
+                                      generatedScript?.[n - 1]?.label ??
+                                      String(n);
+                                    const isVariant =
+                                      getVariantLetter(clipLabel) !== null;
+                                    return (
+                                      <button
+                                        key={n}
+                                        type="button"
+                                        className={cn(
+                                          'h-7 rounded-md text-xs font-medium border px-1.5',
+                                          isVariant ? 'min-w-[2.25rem]' : 'w-7',
+                                          (img.assignedTo as number[]).includes(
+                                            n
+                                          )
+                                            ? 'bg-violet-600 text-white border-violet-600'
+                                            : isVariant
+                                              ? 'bg-violet-50 text-violet-600 border-violet-300 hover:border-violet-500'
+                                              : 'bg-white text-slate-600 border-slate-300 hover:border-violet-400'
+                                        )}
+                                        onClick={() => {
+                                          const cur =
+                                            img.assignedTo as number[];
+                                          const next = cur.includes(n)
+                                            ? cur.filter((x) => x !== n)
+                                            : [...cur, n].sort((a, b) => a - b);
+                                          updateImageAssignment(
+                                            img.id,
+                                            next.length === 0 ? [n] : next
+                                          );
+                                        }}
+                                      >
+                                        {clipLabel}
+                                      </button>
+                                    );
+                                  })}
                                 </div>
                               )}
                             </div>
@@ -1985,98 +2859,19 @@ export default function SandboxPage() {
                     </div>
                   </div>
 
-                  {/* Script Generation Panel */}
-                  <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex flex-col shrink-0">
-                    <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
-                      <div className="flex items-center gap-2">
-                        <FileText className="w-5 h-5 text-violet-500" />
-                        <h2 className="font-semibold text-slate-800">
-                          Script & Dialogue
-                        </h2>
-                      </div>
-                    </div>
-                    <div className="p-4 flex flex-col gap-5">
-                      <div className="space-y-3">
-                        <div className="flex items-center justify-between">
-                          <Label className="text-sm font-medium text-slate-700">
-                            Target Duration
-                          </Label>
-                          <span className="text-sm font-medium text-violet-600 bg-violet-50 px-2 py-0.5 rounded-full">
-                            {targetDuration}s
-                          </span>
-                        </div>
-                        <div className="flex items-center gap-4">
-                          <input
-                            type="range"
-                            min="8"
-                            max="36"
-                            step="7"
-                            value={targetDuration}
-                            onChange={(e) => {
-                              const val = parseInt(e.target.value, 10);
-                              const newCount = 1 + Math.floor((val - 8) / 7);
-                              setTargetDuration(val);
-                              updateConfigInDb({ clipCount: newCount });
-                              // Add empty clips if script exists and slider increased
-                              if (
-                                generatedScript &&
-                                newCount > generatedScript.length
-                              ) {
-                                const extra: ScriptItem[] = Array.from(
-                                  { length: newCount - generatedScript.length },
-                                  (_, i) => ({
-                                    id: generatedScript.length + i + 1,
-                                    text: '',
-                                  })
-                                );
-                                const updated = [...generatedScript, ...extra];
-                                setGeneratedScript(updated);
-                                if (sandboxId) {
-                                  setDoc(
-                                    doc(collection(db, 'sandbox'), sandboxId),
-                                    { scripts: updated },
-                                    { merge: true }
-                                  );
-                                }
-                              }
-                            }}
-                            className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-violet-600"
-                          />
-                        </div>
-                        <p className="text-xs text-slate-500 mt-1">
-                          Generates exactly {clipCount} clips ({targetDuration}s
-                          total)
-                        </p>
-                      </div>
-
-                      <div className="space-y-2">
-                        <Label className="text-sm font-medium text-slate-700">
-                          Goal / Topic
-                        </Label>
-                        <Textarea
-                          placeholder="e.g. Create a series of promotional videos for our new AI product."
-                          value={goalText}
-                          onChange={(e) => setGoalText(e.target.value)}
-                          className="min-h-[80px] resize-y"
-                        />
-                      </div>
-                      <Button
-                        variant="outline"
-                        className="w-full gap-2 border-violet-200 text-violet-700 hover:bg-violet-50 shrink-0"
-                        onClick={handleGenerateScript}
-                        disabled={isGeneratingScript || !goalText.trim()}
-                      >
-                        {isGeneratingScript ? (
-                          <div className="w-4 h-4 rounded-full border-2 border-violet-500 border-t-transparent animate-spin" />
-                        ) : (
-                          <Sparkles className="w-4 h-4" />
-                        )}
-                        {isGeneratingScript
-                          ? 'Generating...'
-                          : 'Generate Script'}
-                      </Button>
-                    </div>
-                  </div>
+                  <Button
+                    variant="outline"
+                    className="w-full gap-2 border-violet-200 text-violet-700 hover:bg-violet-50 shrink-0"
+                    onClick={handleGenerateScript}
+                    disabled={isGeneratingScript || !goalText.trim()}
+                  >
+                    {isGeneratingScript ? (
+                      <div className="w-4 h-4 rounded-full border-2 border-violet-500 border-t-transparent animate-spin" />
+                    ) : (
+                      <Sparkles className="w-4 h-4" />
+                    )}
+                    {isGeneratingScript ? 'Generating...' : 'Generate Script'}
+                  </Button>
 
                   {generatedScript && generatedScript.length > 0 && (
                     <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex flex-col shrink-0">
@@ -2112,251 +2907,121 @@ export default function SandboxPage() {
                       </div>
                       <div className="p-4 space-y-4">
                         <div className="space-y-3">
-                          {generatedScript.map((script, index) => (
-                            <div
-                              key={index}
-                              className="p-3 bg-slate-50 border border-slate-200 rounded-lg text-sm text-slate-600"
-                            >
-                              <div className="flex items-center justify-between mb-2">
-                                <div className="flex items-center gap-1.5">
-                                  <span className="font-medium text-slate-800">
-                                    Clip {script.id}:
-                                  </span>
-                                  {generatedScript.length > 1 && (
-                                    <button
-                                      className="text-slate-400 hover:text-red-500 hover:bg-red-50 rounded p-0.5 transition-colors"
-                                      title="Remove clip"
-                                      onClick={() =>
-                                        handleRemoveClip(script.id)
-                                      }
-                                    >
-                                      <X className="w-3.5 h-3.5" />
-                                    </button>
-                                  )}
-                                </div>
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  disabled={regeneratingDialogueIndex === index}
-                                  className="h-6 text-xs text-violet-600 hover:text-violet-700 hover:bg-violet-50 gap-1 px-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                                  onClick={async () => {
-                                    if (
-                                      !goalText.trim() ||
-                                      !filmDirectionSystem
-                                    )
-                                      return;
-                                    setRegeneratingDialogueIndex(index);
-                                    try {
-                                      const existingDialogues =
-                                        generatedScript.map((s) => s.text);
-                                      const selectionContext = {
-                                        goalText: goalText.trim(),
-                                        aspectRatio,
-                                        hasHumanSubject:
-                                          avatarImages.length > 0,
-                                        isUGC: true,
-                                      };
-
-                                      const response = await fetch(
-                                        '/api/sandbox/generate-scripts',
-                                        {
-                                          method: 'POST',
-                                          headers: {
-                                            'Content-Type': 'application/json',
-                                          },
-                                          body: JSON.stringify({
-                                            goalText: goalText.trim(),
-                                            clipCount: 1,
-                                            commonRules: filmDirectionSystem,
-                                            promptOnlyMode: false,
-                                            existingDialogues,
-                                            styles: filmDirectionSections,
-                                            selectionContext,
-                                            targetClipIndex: index,
-                                          }),
-                                        }
-                                      );
-
-                                      if (response.ok) {
-                                        const data = await response.json();
-                                        if (
-                                          data.dialogues &&
-                                          data.dialogues.length > 0
-                                        ) {
-                                          const newScripts = [
-                                            ...generatedScript,
-                                          ];
-                                          newScripts[index].text =
-                                            data.dialogues[0];
-                                          setGeneratedScript(newScripts);
-                                          if (sandboxId) {
-                                            setDoc(
-                                              doc(
-                                                collection(db, 'sandbox'),
-                                                sandboxId
-                                              ),
-                                              { scripts: newScripts },
-                                              { merge: true }
-                                            );
-                                          }
-                                        }
-                                      }
-                                    } catch (error) {
-                                      console.error(
-                                        'Failed to regenerate dialogue:',
-                                        error
-                                      );
-                                    } finally {
-                                      setRegeneratingDialogueIndex(null);
-                                    }
-                                  }}
+                          {generatedScript.map((script, index) => {
+                            const prevScript = generatedScript[index - 1];
+                            const isFirstInGroup =
+                              script.variationGroup !== undefined &&
+                              prevScript?.variationGroup !==
+                                script.variationGroup;
+                            const groupSize = script.variationGroup
+                              ? generatedScript.filter(
+                                  (s) =>
+                                    s.variationGroup === script.variationGroup
+                                ).length
+                              : 0;
+                            return (
+                              <div key={index}>
+                                {isFirstInGroup && (
+                                  <div className="flex items-center gap-2 mb-1.5 mt-2">
+                                    <div className="h-px flex-1 bg-violet-200" />
+                                    <span className="text-xs font-medium text-violet-600 bg-violet-50 px-2 py-0.5 rounded-full">
+                                      Scene {script.variationGroup} —{' '}
+                                      {groupSize} variations
+                                    </span>
+                                    <div className="h-px flex-1 bg-violet-200" />
+                                  </div>
+                                )}
+                                <div
+                                  className={`p-3 bg-slate-50 border rounded-lg text-sm text-slate-600 ${script.variationGroup !== undefined ? 'border-violet-200 bg-violet-50/30' : 'border-slate-200'}`}
                                 >
-                                  {regeneratingDialogueIndex === index ? (
-                                    <div className="w-3 h-3 rounded-full border-2 border-violet-500 border-t-transparent animate-spin" />
-                                  ) : (
-                                    <RotateCcw className="w-3 h-3" />
-                                  )}
-                                  {regeneratingDialogueIndex === index
-                                    ? 'Regenerating...'
-                                    : 'Regenerate'}
-                                </Button>
-                              </div>
-                              {regeneratingDialogueIndex === index ? (
-                                <div className="flex flex-col gap-2 min-h-[60px] p-2 bg-white border border-slate-200 rounded-md">
-                                  <div className="h-3 w-full bg-slate-100 rounded animate-pulse" />
-                                  <div className="h-3 w-4/5 bg-slate-100 rounded animate-pulse" />
-                                  <div className="h-3 w-2/3 bg-slate-100 rounded animate-pulse" />
-                                </div>
-                              ) : (
-                                <Textarea
-                                  value={script.text}
-                                  onChange={(e) => {
-                                    const newScripts = [...generatedScript];
-                                    newScripts[index].text = e.target.value;
-                                    setGeneratedScript(newScripts);
-                                    if (sandboxId) {
-                                      setDoc(
-                                        doc(
-                                          collection(db, 'sandbox'),
-                                          sandboxId
-                                        ),
-                                        { scripts: newScripts },
-                                        { merge: true }
-                                      );
-                                    }
-                                  }}
-                                  className="min-h-[60px] resize-y text-slate-700 bg-white"
-                                />
-                              )}
-
-                              {/* Per-clip visual prompt */}
-                              {(() => {
-                                const clipImgs = avatarImages.filter(
-                                  (img) =>
-                                    img.assignedTo === 'all' ||
-                                    (Array.isArray(img.assignedTo) &&
-                                      img.assignedTo.includes(script.id))
-                                );
-                                return (
-                                  <div className="mt-2 border-t border-slate-100 pt-2">
-                                    {/* Image thumbnails for this clip */}
-                                    {clipImgs.length > 0 && (
-                                      <div className="flex gap-1 mb-1.5">
-                                        {clipImgs.map((img) => (
-                                          // eslint-disable-next-line @next/next/no-img-element
-                                          <img
-                                            key={img.id}
-                                            src={img.previewUrl}
-                                            alt=""
-                                            className="w-6 h-6 rounded object-cover border border-slate-200 shrink-0"
-                                          />
-                                        ))}
-                                        <span className="text-[10px] text-slate-400 self-center ml-1">
-                                          {clipImgs.length} image
-                                          {clipImgs.length !== 1 ? 's' : ''}
-                                        </span>
-                                      </div>
-                                    )}
-                                    {/* Collapsible visual prompt row */}
-                                    <div className="flex items-center gap-1 w-full">
-                                      <div
-                                        className="flex items-center gap-1 flex-1 cursor-pointer min-w-0"
-                                        onClick={() =>
-                                          setExpandedClipPromptIndex(
-                                            expandedClipPromptIndex === index
-                                              ? null
-                                              : index
-                                          )
-                                        }
-                                      >
-                                        <ChevronRight
-                                          className={cn(
-                                            'w-3 h-3 text-slate-400 transition-transform shrink-0',
-                                            expandedClipPromptIndex === index &&
-                                              'rotate-90'
-                                          )}
-                                        />
-                                        <span className="text-xs text-slate-500 flex-1">
-                                          Visual prompt
-                                        </span>
+                                  <div className="flex items-center justify-between mb-2">
+                                    <div className="flex items-center gap-1.5">
+                                      <span className="font-medium text-slate-800">
+                                        Clip {script.label ?? script.id}:
+                                      </span>
+                                      {script.variationNote && (
                                         <span
-                                          className={cn(
-                                            'text-[10px] font-medium px-1.5 py-0.5 rounded-full shrink-0',
-                                            script.visualPrompt
-                                              ? 'bg-violet-100 text-violet-700'
-                                              : 'bg-slate-100 text-slate-400'
-                                          )}
+                                          className="text-xs text-violet-500 italic truncate max-w-[160px]"
+                                          title={script.variationNote}
                                         >
-                                          {script.visualPrompt
-                                            ? 'Custom'
-                                            : clipImgs.length > 0
-                                              ? 'Auto'
-                                              : 'None'}
+                                          {script.variationNote}
                                         </span>
-                                      </div>
-                                      {regeneratingClipPromptIndex === index ? (
-                                        <div className="w-3 h-3 rounded-full border-2 border-violet-500 border-t-transparent animate-spin shrink-0 ml-1" />
-                                      ) : clipImgs.length > 0 ? (
+                                      )}
+                                      {generatedScript.length > 1 && (
                                         <button
-                                          className="ml-1 text-slate-400 hover:text-violet-600 transition-colors shrink-0"
-                                          title="Regenerate visual prompt for this clip"
+                                          className="text-slate-400 hover:text-red-500 hover:bg-red-50 rounded p-0.5 transition-colors"
+                                          title="Remove clip"
                                           onClick={() =>
-                                            handleRegenerateClipPrompt(index)
+                                            handleRemoveClip(script.id)
                                           }
                                         >
-                                          <RotateCcw className="w-3 h-3" />
+                                          <X className="w-3.5 h-3.5" />
                                         </button>
-                                      ) : null}
+                                      )}
                                     </div>
-                                    {expandedClipPromptIndex === index && (
-                                      <div className="mt-1.5 flex flex-col gap-1.5">
-                                        <Textarea
-                                          value={script.visualPrompt ?? ''}
-                                          placeholder={
-                                            clipImgs.length > 0
-                                              ? 'Scene-specific visual details for this clip…'
-                                              : 'No images assigned — type a custom visual note…'
-                                          }
-                                          className="min-h-[48px] resize-y text-xs text-slate-700 bg-white"
-                                          onChange={(e) => {
-                                            const val = e.target.value;
-                                            const newScripts =
-                                              generatedScript.map((s, i) =>
-                                                i === index
-                                                  ? {
-                                                      ...s,
-                                                      visualPrompt:
-                                                        val || undefined,
-                                                    }
-                                                  : s
+                                    <div className="flex items-center gap-1.5">
+                                      <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        disabled={
+                                          regeneratingDialogueIndex === index
+                                        }
+                                        className="h-6 text-xs text-violet-600 hover:text-violet-700 hover:bg-violet-50 gap-1 px-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                                        onClick={async () => {
+                                          if (
+                                            !goalText.trim() ||
+                                            !filmDirectionSystem
+                                          )
+                                            return;
+                                          setRegeneratingDialogueIndex(index);
+                                          try {
+                                            const existingDialogues =
+                                              generatedScript.map(
+                                                (s) => s.text
                                               );
-                                            setGeneratedScript(newScripts);
-                                            if (clipPromptSaveTimer.current)
-                                              clearTimeout(
-                                                clipPromptSaveTimer.current
-                                              );
-                                            clipPromptSaveTimer.current =
-                                              setTimeout(() => {
+                                            const selectionContext = {
+                                              goalText: goalText.trim(),
+                                              aspectRatio,
+                                              hasHumanSubject:
+                                                avatarImages.length > 0,
+                                              isUGC: true,
+                                            };
+
+                                            const response = await fetch(
+                                              '/api/sandbox/generate-scripts',
+                                              {
+                                                method: 'POST',
+                                                headers: {
+                                                  'Content-Type':
+                                                    'application/json',
+                                                },
+                                                body: JSON.stringify({
+                                                  goalText: goalText.trim(),
+                                                  clipCount: 1,
+                                                  commonRules:
+                                                    filmDirectionSystem,
+                                                  promptOnlyMode: false,
+                                                  existingDialogues,
+                                                  styles: filmDirectionSections,
+                                                  selectionContext,
+                                                  targetClipIndex: index,
+                                                }),
+                                              }
+                                            );
+
+                                            if (response.ok) {
+                                              const data =
+                                                await response.json();
+                                              if (
+                                                data.dialogues &&
+                                                data.dialogues.length > 0
+                                              ) {
+                                                const newScripts = [
+                                                  ...generatedScript,
+                                                ];
+                                                newScripts[index].text =
+                                                  data.dialogues[0];
+                                                setGeneratedScript(newScripts);
                                                 if (sandboxId) {
                                                   setDoc(
                                                     doc(
@@ -2367,45 +3032,230 @@ export default function SandboxPage() {
                                                     { merge: true }
                                                   );
                                                 }
-                                              }, 800);
-                                          }}
-                                        />
-                                        {script.visualPrompt && (
-                                          <button
-                                            className="self-end text-xs text-slate-400 hover:text-red-500 transition-colors"
-                                            onClick={() => {
-                                              const newScripts =
-                                                generatedScript.map((s, i) =>
-                                                  i === index
-                                                    ? {
-                                                        ...s,
-                                                        visualPrompt: undefined,
-                                                      }
-                                                    : s
-                                                );
-                                              setGeneratedScript(newScripts);
-                                              if (sandboxId) {
-                                                setDoc(
-                                                  doc(
-                                                    collection(db, 'sandbox'),
-                                                    sandboxId
-                                                  ),
-                                                  { scripts: newScripts },
-                                                  { merge: true }
-                                                );
                                               }
-                                            }}
+                                            }
+                                          } catch (error) {
+                                            console.error(
+                                              'Failed to regenerate dialogue:',
+                                              error
+                                            );
+                                          } finally {
+                                            setRegeneratingDialogueIndex(null);
+                                          }
+                                        }}
+                                      >
+                                        {regeneratingDialogueIndex === index ? (
+                                          <div className="w-3 h-3 rounded-full border-2 border-violet-500 border-t-transparent animate-spin" />
+                                        ) : (
+                                          <RotateCcw className="w-3 h-3" />
+                                        )}
+                                        {regeneratingDialogueIndex === index
+                                          ? 'Regenerating...'
+                                          : 'Regenerate'}
+                                      </Button>
+                                    </div>
+                                  </div>
+                                  {regeneratingDialogueIndex === index ? (
+                                    <div className="flex flex-col gap-2 min-h-[60px] p-2 bg-white border border-slate-200 rounded-md">
+                                      <div className="h-3 w-full bg-slate-100 rounded animate-pulse" />
+                                      <div className="h-3 w-4/5 bg-slate-100 rounded animate-pulse" />
+                                      <div className="h-3 w-2/3 bg-slate-100 rounded animate-pulse" />
+                                    </div>
+                                  ) : (
+                                    <Textarea
+                                      value={script.text}
+                                      onChange={(e) => {
+                                        const newScripts = [...generatedScript];
+                                        newScripts[index].text = e.target.value;
+                                        setGeneratedScript(newScripts);
+                                        if (sandboxId) {
+                                          setDoc(
+                                            doc(
+                                              collection(db, 'sandbox'),
+                                              sandboxId
+                                            ),
+                                            { scripts: newScripts },
+                                            { merge: true }
+                                          );
+                                        }
+                                      }}
+                                      className="min-h-[60px] resize-y text-slate-700 bg-white"
+                                    />
+                                  )}
+
+                                  {/* Per-clip visual prompt */}
+                                  {(() => {
+                                    const clipImgs = avatarImages.filter(
+                                      (img) =>
+                                        img.assignedTo === 'all' ||
+                                        (Array.isArray(img.assignedTo) &&
+                                          img.assignedTo.includes(script.id))
+                                    );
+                                    return (
+                                      <div className="mt-2 border-t border-slate-100 pt-2">
+                                        {/* Image thumbnails for this clip */}
+                                        {clipImgs.length > 0 && (
+                                          <div className="flex gap-1 mb-1.5">
+                                            {clipImgs.map((img) => (
+                                              // eslint-disable-next-line @next/next/no-img-element
+                                              <img
+                                                key={img.id}
+                                                src={img.previewUrl}
+                                                alt=""
+                                                className="w-6 h-6 rounded object-cover border border-slate-200 shrink-0"
+                                              />
+                                            ))}
+                                            <span className="text-[10px] text-slate-400 self-center ml-1">
+                                              {clipImgs.length} image
+                                              {clipImgs.length !== 1 ? 's' : ''}
+                                            </span>
+                                          </div>
+                                        )}
+                                        {/* Collapsible visual prompt row */}
+                                        <div className="flex items-center gap-1 w-full">
+                                          <div
+                                            className="flex items-center gap-1 flex-1 cursor-pointer min-w-0"
+                                            onClick={() =>
+                                              setExpandedClipPromptIndex(
+                                                expandedClipPromptIndex ===
+                                                  index
+                                                  ? null
+                                                  : index
+                                              )
+                                            }
                                           >
-                                            Reset
-                                          </button>
+                                            <ChevronRight
+                                              className={cn(
+                                                'w-3 h-3 text-slate-400 transition-transform shrink-0',
+                                                expandedClipPromptIndex ===
+                                                  index && 'rotate-90'
+                                              )}
+                                            />
+                                            <span className="text-xs text-slate-500 flex-1">
+                                              Visual prompt
+                                            </span>
+                                            <span
+                                              className={cn(
+                                                'text-[10px] font-medium px-1.5 py-0.5 rounded-full shrink-0',
+                                                script.visualPrompt
+                                                  ? 'bg-violet-100 text-violet-700'
+                                                  : 'bg-slate-100 text-slate-400'
+                                              )}
+                                            >
+                                              {script.visualPrompt
+                                                ? 'Custom'
+                                                : clipImgs.length > 0
+                                                  ? 'Auto'
+                                                  : 'None'}
+                                            </span>
+                                          </div>
+                                          {regeneratingClipPromptIndex ===
+                                          index ? (
+                                            <div className="w-3 h-3 rounded-full border-2 border-violet-500 border-t-transparent animate-spin shrink-0 ml-1" />
+                                          ) : clipImgs.length > 0 ? (
+                                            <button
+                                              className="ml-1 text-slate-400 hover:text-violet-600 transition-colors shrink-0"
+                                              title="Regenerate visual prompt for this clip"
+                                              onClick={() =>
+                                                handleRegenerateClipPrompt(
+                                                  index
+                                                )
+                                              }
+                                            >
+                                              <RotateCcw className="w-3 h-3" />
+                                            </button>
+                                          ) : null}
+                                        </div>
+                                        {expandedClipPromptIndex === index && (
+                                          <div className="mt-1.5 flex flex-col gap-1.5">
+                                            <Textarea
+                                              value={script.visualPrompt ?? ''}
+                                              placeholder={
+                                                clipImgs.length > 0
+                                                  ? 'Scene-specific visual details for this clip…'
+                                                  : 'No images assigned — type a custom visual note…'
+                                              }
+                                              className="min-h-[48px] resize-y text-xs text-slate-700 bg-white"
+                                              onChange={(e) => {
+                                                const val = e.target.value;
+                                                const newScripts =
+                                                  generatedScript.map((s, i) =>
+                                                    i === index
+                                                      ? {
+                                                          ...s,
+                                                          visualPrompt:
+                                                            val || undefined,
+                                                        }
+                                                      : s
+                                                  );
+                                                setGeneratedScript(newScripts);
+                                                if (clipPromptSaveTimer.current)
+                                                  clearTimeout(
+                                                    clipPromptSaveTimer.current
+                                                  );
+                                                clipPromptSaveTimer.current =
+                                                  setTimeout(() => {
+                                                    if (sandboxId) {
+                                                      setDoc(
+                                                        doc(
+                                                          collection(
+                                                            db,
+                                                            'sandbox'
+                                                          ),
+                                                          sandboxId
+                                                        ),
+                                                        { scripts: newScripts },
+                                                        { merge: true }
+                                                      );
+                                                    }
+                                                  }, 800);
+                                              }}
+                                            />
+                                            {script.visualPrompt && (
+                                              <button
+                                                className="self-end text-xs text-slate-400 hover:text-red-500 transition-colors"
+                                                onClick={() => {
+                                                  const newScripts =
+                                                    generatedScript.map(
+                                                      (s, i) =>
+                                                        i === index
+                                                          ? {
+                                                              ...s,
+                                                              visualPrompt:
+                                                                undefined,
+                                                            }
+                                                          : s
+                                                    );
+                                                  setGeneratedScript(
+                                                    newScripts
+                                                  );
+                                                  if (sandboxId) {
+                                                    setDoc(
+                                                      doc(
+                                                        collection(
+                                                          db,
+                                                          'sandbox'
+                                                        ),
+                                                        sandboxId
+                                                      ),
+                                                      { scripts: newScripts },
+                                                      { merge: true }
+                                                    );
+                                                  }
+                                                }}
+                                              >
+                                                Reset
+                                              </button>
+                                            )}
+                                          </div>
                                         )}
                                       </div>
-                                    )}
-                                  </div>
-                                );
-                              })()}
-                            </div>
-                          ))}
+                                    );
+                                  })()}
+                                </div>
+                              </div>
+                            );
+                          })}
                         </div>
                         <div className="space-y-2 pt-2 border-t border-slate-100">
                           <div className="flex items-center justify-between">
@@ -2729,9 +3579,37 @@ export default function SandboxPage() {
 
                 {/* Right Column: Output/Preview */}
                 <div className="h-full overflow-y-auto p-6 bg-slate-50">
-                  <h2 className="text-lg font-semibold mb-4">
-                    Output / Preview
-                  </h2>
+                  <div className="flex items-start justify-between mb-4">
+                    <h2 className="text-lg font-semibold">Output / Preview</h2>
+                    {(() => {
+                      const videoCost = runs.reduce(
+                        (sum, r) => sum + (r.totalCostUsd ?? 0),
+                        0
+                      );
+                      const grandTotal =
+                        videoCost + imageGenCostUsd + scriptGenCostUsd;
+                      if (grandTotal === 0) return null;
+                      return (
+                        <div className="text-right">
+                          <div className="text-2xl font-bold text-slate-800">
+                            ${grandTotal.toFixed(2)}
+                          </div>
+                          <div className="text-xs text-slate-400 mt-0.5 space-y-0.5">
+                            {videoCost > 0 && (
+                              <div>Video: ${videoCost.toFixed(2)}</div>
+                            )}
+                            {imageGenCostUsd > 0 && (
+                              <div>Images: ${imageGenCostUsd.toFixed(2)}</div>
+                            )}
+                            {scriptGenCostUsd > 0 && (
+                              <div>Scripts: ${scriptGenCostUsd.toFixed(2)}</div>
+                            )}
+                            <div className="text-slate-300">approx.</div>
+                          </div>
+                        </div>
+                      );
+                    })()}
+                  </div>
 
                   {/* Complete Video View */}
                   {(() => {
@@ -2740,14 +3618,78 @@ export default function SandboxPage() {
                       steps.every((s) => s.status === 'done');
                     if (!isAllDone) return null;
 
-                    let finalVideoUrl = '';
                     const activeRun = runs.find((r) => r.id === currentRunId);
-
-                    // If not extend enabled, fallback to stitchedVideoUrl. If it's missing (maybe not stitched yet), we might have no final video.
-                    if (
+                    const hasVariantSteps = steps.some(
+                      (s) => getVariantLetter(s.label) !== null
+                    );
+                    const isNoExtend =
                       steps.length > 1 &&
-                      (!activeRun || activeRun.isExtendEnabled === false)
-                    ) {
+                      (!activeRun || activeRun.isExtendEnabled === false);
+
+                    // Variation run — show one player per final letter
+                    if (isNoExtend && hasVariantSteps) {
+                      const urls = activeRun?.stitchedVideoUrls;
+                      if (!urls || Object.keys(urls).length === 0) {
+                        return (
+                          <div className="mb-6 bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden p-4">
+                            <div className="text-sm font-semibold text-slate-800 mb-1">
+                              Final Videos
+                            </div>
+                            <p className="text-xs text-slate-500">
+                              Finalizing variant stitches…
+                            </p>
+                          </div>
+                        );
+                      }
+                      return (
+                        <div className="mb-6 space-y-4">
+                          {Object.entries(urls)
+                            .sort()
+                            .map(([letter, url]) => (
+                              <div
+                                key={letter}
+                                className="bg-white rounded-xl border border-violet-200 shadow-sm overflow-hidden p-4"
+                              >
+                                <div className="flex items-center justify-between mb-3">
+                                  <h3 className="font-semibold text-slate-800">
+                                    Final {letter}
+                                  </h3>
+                                </div>
+                                <video
+                                  src={url}
+                                  controls
+                                  className="w-full rounded-lg aspect-video object-contain bg-black"
+                                />
+                                <div className="mt-4 flex justify-end">
+                                  <button
+                                    onClick={async () => {
+                                      const res = await fetch(url);
+                                      const blob = await res.blob();
+                                      const blobUrl =
+                                        window.URL.createObjectURL(blob);
+                                      const a = document.createElement('a');
+                                      a.href = blobUrl;
+                                      a.download = `${topicName || 'video'}-Final${letter}-${Date.now()}.mp4`;
+                                      document.body.appendChild(a);
+                                      a.click();
+                                      window.URL.revokeObjectURL(blobUrl);
+                                      document.body.removeChild(a);
+                                    }}
+                                    className="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors h-9 px-4 gap-2 text-white bg-violet-600 hover:bg-violet-700 shadow-sm"
+                                  >
+                                    <Download className="w-4 h-4" /> Download
+                                    Final {letter}
+                                  </button>
+                                </div>
+                              </div>
+                            ))}
+                        </div>
+                      );
+                    }
+
+                    // Non-variation run — existing single final logic
+                    let finalVideoUrl = '';
+                    if (isNoExtend) {
                       finalVideoUrl = activeRun?.stitchedVideoUrl || '';
                     } else {
                       const lastDoneStep = steps[steps.length - 1];
@@ -2755,11 +3697,8 @@ export default function SandboxPage() {
                     }
 
                     if (!finalVideoUrl) {
-                      // Show a generate button when all clips are done but stitch is missing
                       const needsStitch =
-                        steps.length > 1 &&
-                        (!activeRun || activeRun.isExtendEnabled === false) &&
-                        !activeRun?.stitchedVideoUrl;
+                        isNoExtend && !activeRun?.stitchedVideoUrl;
                       if (!needsStitch) return null;
                       return (
                         <div className="mb-6 bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden p-4">
@@ -3061,125 +4000,81 @@ export default function SandboxPage() {
 
                       {/* Sequential Steps */}
                       <div className="space-y-4">
-                        {steps.map((step, idx) => (
-                          <div
-                            key={step.stepNumber}
-                            className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden p-4"
-                          >
-                            <div className="flex items-center justify-between mb-3">
-                              <div className="flex items-center gap-2">
-                                <h3 className="font-medium text-slate-800">
-                                  {idx === steps.length - 1 &&
-                                  step.status === 'done' &&
-                                  isExtendEnabled
-                                    ? 'Final Video'
-                                    : `Step ${step.stepNumber}`}
-                                </h3>
-                                {step.cumulativeDuration && (
-                                  <span className="text-xs text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full">
-                                    ~{step.cumulativeDuration}s
-                                  </span>
-                                )}
-                              </div>
-                              <div className="flex flex-col items-end gap-2">
+                        {(() => {
+                          const renderCard = (
+                            step: StepSlot,
+                            idx: number,
+                            grouped: boolean
+                          ) => (
+                            <div
+                              key={step.stepNumber}
+                              className={`bg-white rounded-xl border shadow-sm overflow-hidden p-4 ${grouped ? 'border-violet-200' : 'border-slate-200'}`}
+                            >
+                              <div className="flex items-center justify-between mb-3">
                                 <div className="flex items-center gap-2">
-                                  {step.status === 'generating' && (
-                                    <span className="text-xs font-medium text-amber-600 bg-amber-50 px-2 py-1 rounded-full flex items-center gap-1">
-                                      <div className="w-3 h-3 border-2 border-amber-500 border-t-transparent rounded-full animate-spin" />
-                                      Generating
+                                  <h3 className="font-medium text-slate-800">
+                                    {idx === steps.length - 1 &&
+                                    step.status === 'done' &&
+                                    isExtendEnabled
+                                      ? 'Final Video'
+                                      : `Clip ${step.label ?? step.stepNumber}`}
+                                  </h3>
+                                  {step.cumulativeDuration && (
+                                    <span className="text-xs text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full">
+                                      ~{step.cumulativeDuration}s
                                     </span>
                                   )}
-                                  {step.status === 'done' && step.videoUrl && (
-                                    <span className="text-xs font-medium text-emerald-600 bg-emerald-50 px-2 py-1 rounded-full">
-                                      Completed
-                                    </span>
-                                  )}
-                                  {step.status === 'done' && !step.videoUrl && (
-                                    <span className="text-xs font-medium text-amber-600 bg-amber-50 px-2 py-1 rounded-full">
-                                      No Data
-                                    </span>
-                                  )}
-                                  {step.status === 'error' && (
-                                    <span className="text-xs font-medium text-red-600 bg-red-50 px-2 py-1 rounded-full">
-                                      Error
-                                    </span>
-                                  )}
-                                  {step.status === 'idle' && (
-                                    <span className="text-xs font-medium text-slate-500 bg-slate-100 px-2 py-1 rounded-full">
-                                      Waiting
-                                    </span>
-                                  )}
-                                </div>
-
-                                {step.status === 'done' &&
-                                  (!step.videoVersions ||
-                                    step.videoVersions.length === 0) && (
-                                    <div className="flex items-center gap-2 bg-slate-100 rounded-md p-1 mt-1 justify-end">
-                                      <Button
-                                        variant="ghost"
-                                        size="sm"
-                                        className="h-6 px-2 text-xs font-medium text-violet-600 hover:text-violet-700 gap-1"
-                                        disabled={isCreatingVideos}
-                                        onClick={() =>
-                                          handleRetryStep(step.stepNumber)
-                                        }
-                                      >
-                                        <RotateCcw className="w-3 h-3" />
-                                        Regenerate
-                                      </Button>
-                                    </div>
-                                  )}
-                                {step.status === 'done' &&
-                                  step.videoVersions &&
-                                  step.videoVersions.length > 0 && (
-                                    <div className="flex items-center gap-2 bg-slate-100 rounded-md p-1 mt-1 justify-between w-full">
-                                      <div className="flex items-center">
-                                        <Button
-                                          variant="ghost"
-                                          size="sm"
-                                          className="h-6 w-6 p-0"
-                                          disabled={
-                                            step.activeVersionIndex === 0
-                                          }
-                                          onClick={() =>
-                                            handleChangeStepVersion(
-                                              step.stepNumber,
-                                              currentRunId!,
-                                              (step.activeVersionIndex || 0) - 1
-                                            )
-                                          }
-                                        >
-                                          <ChevronDown className="w-4 h-4 rotate-90" />
-                                        </Button>
-                                        <span className="text-xs font-medium text-slate-600 min-w-[70px] text-center">
-                                          Version{' '}
-                                          {
-                                            step.videoVersions[
-                                              step.activeVersionIndex || 0
-                                            ].version
-                                          }
+                                  {step.status === 'done' &&
+                                    step.videoUrl &&
+                                    (() => {
+                                      const cost = clipCostUsd(
+                                        model,
+                                        8,
+                                        videoQuality
+                                      );
+                                      return cost ? (
+                                        <span className="text-xs text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full">
+                                          {cost}
                                         </span>
-                                        <Button
-                                          variant="ghost"
-                                          size="sm"
-                                          className="h-6 w-6 p-0"
-                                          disabled={
-                                            step.activeVersionIndex ===
-                                            step.videoVersions.length - 1
-                                          }
-                                          onClick={() =>
-                                            handleChangeStepVersion(
-                                              step.stepNumber,
-                                              currentRunId!,
-                                              (step.activeVersionIndex || 0) + 1
-                                            )
-                                          }
-                                        >
-                                          <ChevronDown className="w-4 h-4 -rotate-90" />
-                                        </Button>
-                                      </div>
-                                      <div className="flex items-center">
-                                        <div className="w-px h-4 bg-slate-200 mx-1" />
+                                      ) : null;
+                                    })()}
+                                </div>
+                                <div className="flex flex-col items-end gap-2">
+                                  <div className="flex items-center gap-2">
+                                    {step.status === 'generating' && (
+                                      <span className="text-xs font-medium text-amber-600 bg-amber-50 px-2 py-1 rounded-full flex items-center gap-1">
+                                        <div className="w-3 h-3 border-2 border-amber-500 border-t-transparent rounded-full animate-spin" />
+                                        Generating
+                                      </span>
+                                    )}
+                                    {step.status === 'done' &&
+                                      step.videoUrl && (
+                                        <span className="text-xs font-medium text-emerald-600 bg-emerald-50 px-2 py-1 rounded-full">
+                                          Completed
+                                        </span>
+                                      )}
+                                    {step.status === 'done' &&
+                                      !step.videoUrl && (
+                                        <span className="text-xs font-medium text-amber-600 bg-amber-50 px-2 py-1 rounded-full">
+                                          No Data
+                                        </span>
+                                      )}
+                                    {step.status === 'error' && (
+                                      <span className="text-xs font-medium text-red-600 bg-red-50 px-2 py-1 rounded-full">
+                                        Error
+                                      </span>
+                                    )}
+                                    {step.status === 'idle' && (
+                                      <span className="text-xs font-medium text-slate-500 bg-slate-100 px-2 py-1 rounded-full">
+                                        Waiting
+                                      </span>
+                                    )}
+                                  </div>
+
+                                  {step.status === 'done' &&
+                                    (!step.videoVersions ||
+                                      step.videoVersions.length === 0) && (
+                                      <div className="flex items-center gap-2 bg-slate-100 rounded-md p-1 mt-1 justify-end">
                                         <Button
                                           variant="ghost"
                                           size="sm"
@@ -3193,142 +4088,253 @@ export default function SandboxPage() {
                                           Regenerate
                                         </Button>
                                       </div>
-                                    </div>
-                                  )}
-                              </div>
-                            </div>
-                            {step.dialogue && (
-                              <div className="mb-3 text-sm text-slate-600 bg-slate-50 p-2 rounded border border-slate-100">
-                                <span className="font-medium text-slate-700 mr-2">
-                                  Dialogue:
-                                </span>
-                                {step.dialogue}
-                              </div>
-                            )}
-                            {step.status === 'generating' && (
-                              <div className="aspect-video bg-slate-100 rounded-lg flex flex-col items-center justify-center gap-3 relative">
-                                <div className="w-8 h-8 rounded-full border-4 border-violet-200 border-t-violet-600 animate-spin" />
-                                <span className="text-sm font-medium text-slate-500">
-                                  Generating video...
-                                </span>
-                                <button
-                                  onClick={handleStopGenerating}
-                                  className="absolute top-2 right-2 text-xs font-medium text-red-500 hover:text-red-700 bg-white border border-red-200 hover:border-red-400 px-2 py-1 rounded-full flex items-center gap-1 transition-colors"
-                                >
-                                  <Square className="w-3 h-3 fill-red-500" />
-                                  Stop
-                                </button>
-                              </div>
-                            )}
-                            {step.status === 'done' && step.videoUrl && (
-                              <div>
-                                <video
-                                  src={step.videoUrl}
-                                  controls
-                                  className="w-full rounded-lg aspect-video object-contain bg-black"
-                                />
-                                {step.videoReferenceUrl && (
-                                  <div className="mt-2 text-xs">
-                                    <a
-                                      href={step.videoReferenceUrl}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      className="text-violet-600 hover:underline flex items-center gap-1"
-                                    >
-                                      <FileText className="w-3 h-3" />
-                                      View videoReference JSON
-                                    </a>
-                                  </div>
-                                )}
-                                <div className="mt-3 flex items-center justify-end gap-2">
-                                  <button
-                                    onClick={async (e) => {
-                                      const btn = e.currentTarget;
-                                      btn.disabled = true;
-                                      btn.textContent = 'Extracting…';
-                                      try {
-                                        const res = await fetch(
-                                          '/api/sandbox/stitch',
-                                          {
-                                            method: 'POST',
-                                            headers: {
-                                              'Content-Type':
-                                                'application/json',
-                                            },
-                                            body: JSON.stringify({
-                                              videoUrls: [step.videoUrl],
-                                              filename: `clip_${step.stepNumber}_audio_${Date.now()}.mp3`,
-                                              extractAudio: true,
-                                            }),
-                                          }
-                                        );
-                                        const data = await res.json();
-                                        if (data.audioUrl) {
-                                          const audioRes = await fetch(
-                                            data.audioUrl
-                                          );
-                                          const audioBlob =
-                                            await audioRes.blob();
-                                          const blobUrl =
-                                            window.URL.createObjectURL(
-                                              audioBlob
-                                            );
-                                          const a = document.createElement('a');
-                                          a.href = blobUrl;
-                                          a.download = `${topicName || 'clip'}-step${step.stepNumber}.mp3`;
-                                          document.body.appendChild(a);
-                                          a.click();
-                                          window.URL.revokeObjectURL(blobUrl);
-                                          document.body.removeChild(a);
-                                        }
-                                      } catch (err) {
-                                        console.error(
-                                          'Audio extract failed',
-                                          err
-                                        );
-                                      } finally {
-                                        btn.disabled = false;
-                                        btn.textContent = 'Download Audio';
-                                      }
-                                    }}
-                                    className="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors h-8 px-3 gap-1.5 text-slate-700 bg-slate-100 hover:bg-slate-200"
-                                  >
-                                    Download Audio
-                                  </button>
-                                  {idx === steps.length - 1 &&
-                                    isExtendEnabled && (
-                                      <a
-                                        href={step.videoUrl}
-                                        download
-                                        className="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors h-8 px-4 gap-1.5 text-white bg-emerald-600 hover:bg-emerald-700 shadow-sm"
-                                      >
-                                        Download Output
-                                      </a>
+                                    )}
+                                  {step.status === 'done' &&
+                                    step.videoVersions &&
+                                    step.videoVersions.length > 0 && (
+                                      <div className="flex items-center gap-2 bg-slate-100 rounded-md p-1 mt-1 justify-between w-full">
+                                        <div className="flex items-center">
+                                          <Button
+                                            variant="ghost"
+                                            size="sm"
+                                            className="h-6 w-6 p-0"
+                                            disabled={
+                                              step.activeVersionIndex === 0
+                                            }
+                                            onClick={() =>
+                                              handleChangeStepVersion(
+                                                step.stepNumber,
+                                                currentRunId!,
+                                                (step.activeVersionIndex || 0) -
+                                                  1
+                                              )
+                                            }
+                                          >
+                                            <ChevronDown className="w-4 h-4 rotate-90" />
+                                          </Button>
+                                          <span className="text-xs font-medium text-slate-600 min-w-[70px] text-center">
+                                            Version{' '}
+                                            {
+                                              step.videoVersions[
+                                                step.activeVersionIndex || 0
+                                              ].version
+                                            }
+                                          </span>
+                                          <Button
+                                            variant="ghost"
+                                            size="sm"
+                                            className="h-6 w-6 p-0"
+                                            disabled={
+                                              step.activeVersionIndex ===
+                                              step.videoVersions.length - 1
+                                            }
+                                            onClick={() =>
+                                              handleChangeStepVersion(
+                                                step.stepNumber,
+                                                currentRunId!,
+                                                (step.activeVersionIndex || 0) +
+                                                  1
+                                              )
+                                            }
+                                          >
+                                            <ChevronDown className="w-4 h-4 -rotate-90" />
+                                          </Button>
+                                        </div>
+                                        <div className="flex items-center">
+                                          <div className="w-px h-4 bg-slate-200 mx-1" />
+                                          <Button
+                                            variant="ghost"
+                                            size="sm"
+                                            className="h-6 px-2 text-xs font-medium text-violet-600 hover:text-violet-700 gap-1"
+                                            disabled={isCreatingVideos}
+                                            onClick={() =>
+                                              handleRetryStep(step.stepNumber)
+                                            }
+                                          >
+                                            <RotateCcw className="w-3 h-3" />
+                                            Regenerate
+                                          </Button>
+                                        </div>
+                                      </div>
                                     )}
                                 </div>
                               </div>
-                            )}
-                            {step.status === 'error' && (
-                              <div className="aspect-video bg-red-50 rounded-lg flex flex-col items-center justify-center p-4 text-center">
-                                <X className="w-8 h-8 text-red-400 mb-2" />
-                                <p className="text-sm text-red-600 mb-3">
-                                  {step.errorMsg || 'Failed to generate step'}
-                                </p>
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  onClick={() =>
-                                    handleRetryStep(step.stepNumber)
-                                  }
-                                  className="gap-2"
-                                >
-                                  <RotateCcw className="w-4 h-4" />
-                                  Retry Step
-                                </Button>
+                              {step.dialogue && (
+                                <div className="mb-1.5 text-sm text-slate-600 bg-slate-50 p-2 rounded border border-slate-100">
+                                  <span className="font-medium text-slate-700 mr-2">
+                                    Dialogue:
+                                  </span>
+                                  {step.dialogue}
+                                </div>
+                              )}
+                              {step.visualPrompt && (
+                                <div className="mb-3 text-sm text-slate-500 bg-slate-50 p-2 rounded border border-slate-100">
+                                  <span className="font-medium text-slate-600 mr-2">
+                                    Prompt:
+                                  </span>
+                                  {step.visualPrompt}
+                                </div>
+                              )}
+                              {step.status === 'generating' && (
+                                <div className="aspect-video bg-slate-100 rounded-lg flex flex-col items-center justify-center gap-3 relative">
+                                  <div className="w-8 h-8 rounded-full border-4 border-violet-200 border-t-violet-600 animate-spin" />
+                                  <span className="text-sm font-medium text-slate-500">
+                                    Generating video...
+                                  </span>
+                                  <button
+                                    onClick={handleStopGenerating}
+                                    className="absolute top-2 right-2 text-xs font-medium text-red-500 hover:text-red-700 bg-white border border-red-200 hover:border-red-400 px-2 py-1 rounded-full flex items-center gap-1 transition-colors"
+                                  >
+                                    <Square className="w-3 h-3 fill-red-500" />
+                                    Stop
+                                  </button>
+                                </div>
+                              )}
+                              {step.status === 'done' && step.videoUrl && (
+                                <div>
+                                  <video
+                                    src={step.videoUrl}
+                                    controls
+                                    className="w-full rounded-lg aspect-video object-contain bg-black"
+                                  />
+                                  {step.videoReferenceUrl && (
+                                    <div className="mt-2 text-xs">
+                                      <a
+                                        href={step.videoReferenceUrl}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="text-violet-600 hover:underline flex items-center gap-1"
+                                      >
+                                        <FileText className="w-3 h-3" />
+                                        View videoReference JSON
+                                      </a>
+                                    </div>
+                                  )}
+                                  <div className="mt-3 flex items-center justify-end gap-2">
+                                    <button
+                                      onClick={async (e) => {
+                                        const btn = e.currentTarget;
+                                        btn.disabled = true;
+                                        btn.textContent = 'Extracting…';
+                                        try {
+                                          const res = await fetch(
+                                            '/api/sandbox/stitch',
+                                            {
+                                              method: 'POST',
+                                              headers: {
+                                                'Content-Type':
+                                                  'application/json',
+                                              },
+                                              body: JSON.stringify({
+                                                videoUrls: [step.videoUrl],
+                                                filename: `clip_${step.stepNumber}_audio_${Date.now()}.mp3`,
+                                                extractAudio: true,
+                                              }),
+                                            }
+                                          );
+                                          const data = await res.json();
+                                          if (data.audioUrl) {
+                                            const audioRes = await fetch(
+                                              data.audioUrl
+                                            );
+                                            const audioBlob =
+                                              await audioRes.blob();
+                                            const blobUrl =
+                                              window.URL.createObjectURL(
+                                                audioBlob
+                                              );
+                                            const a =
+                                              document.createElement('a');
+                                            a.href = blobUrl;
+                                            a.download = `${topicName || 'clip'}-step${step.stepNumber}.mp3`;
+                                            document.body.appendChild(a);
+                                            a.click();
+                                            window.URL.revokeObjectURL(blobUrl);
+                                            document.body.removeChild(a);
+                                          }
+                                        } catch (err) {
+                                          console.error(
+                                            'Audio extract failed',
+                                            err
+                                          );
+                                        } finally {
+                                          btn.disabled = false;
+                                          btn.textContent = 'Download Audio';
+                                        }
+                                      }}
+                                      className="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors h-8 px-3 gap-1.5 text-slate-700 bg-slate-100 hover:bg-slate-200"
+                                    >
+                                      Download Audio
+                                    </button>
+                                    {idx === steps.length - 1 &&
+                                      isExtendEnabled && (
+                                        <a
+                                          href={step.videoUrl}
+                                          download
+                                          className="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors h-8 px-4 gap-1.5 text-white bg-emerald-600 hover:bg-emerald-700 shadow-sm"
+                                        >
+                                          Download Output
+                                        </a>
+                                      )}
+                                  </div>
+                                </div>
+                              )}
+                              {step.status === 'error' && (
+                                <div className="aspect-video bg-red-50 rounded-lg flex flex-col items-center justify-center p-4 text-center">
+                                  <X className="w-8 h-8 text-red-400 mb-2" />
+                                  <p className="text-sm text-red-600 mb-3">
+                                    {step.errorMsg || 'Failed to generate step'}
+                                  </p>
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() =>
+                                      handleRetryStep(step.stepNumber)
+                                    }
+                                    className="gap-2"
+                                  >
+                                    <RotateCcw className="w-4 h-4" />
+                                    Retry Step
+                                  </Button>
+                                </div>
+                              )}
+                            </div>
+                          );
+                          return groupStepRows(steps).map((row) => {
+                            if (row.type === 'single') {
+                              return renderCard(row.step, row.idx, false);
+                            }
+                            return (
+                              <div
+                                key={`group-${row.groupBase}`}
+                                className="space-y-2"
+                              >
+                                <div className="flex items-center gap-2">
+                                  <div className="h-px flex-1 bg-violet-200" />
+                                  <span className="text-xs font-medium text-violet-600 bg-violet-50 px-2 py-0.5 rounded-full">
+                                    Scene {row.groupBase} — {row.steps.length}{' '}
+                                    alternatives
+                                  </span>
+                                  <div className="h-px flex-1 bg-violet-200" />
+                                </div>
+                                <div className="flex gap-3">
+                                  {row.steps.map((step, gIdx) => (
+                                    <div
+                                      key={step.stepNumber}
+                                      className="flex-1 min-w-0"
+                                    >
+                                      {renderCard(
+                                        step,
+                                        row.startIdx + gIdx,
+                                        true
+                                      )}
+                                    </div>
+                                  ))}
+                                </div>
                               </div>
-                            )}
-                          </div>
-                        ))}
+                            );
+                          });
+                        })()}
                       </div>
                     </div>
                   )}
@@ -3413,11 +4419,84 @@ export default function SandboxPage() {
                                               (s) => s.status === 'done'
                                             );
                                           if (!isAllDone) return null;
-                                          let finalVideoUrl = '';
-                                          if (
+                                          const runIsNoExtend =
                                             run.steps.length > 1 &&
-                                            run.isExtendEnabled === false
+                                            run.isExtendEnabled === false;
+                                          const runHasVariants = run.steps.some(
+                                            (s) =>
+                                              getVariantLetter(s.label) !== null
+                                          );
+
+                                          // Variation run: show one player per final letter
+                                          if (
+                                            runIsNoExtend &&
+                                            runHasVariants &&
+                                            run.stitchedVideoUrls
                                           ) {
+                                            return (
+                                              <div className="mb-4 space-y-3">
+                                                {Object.entries(
+                                                  run.stitchedVideoUrls
+                                                )
+                                                  .sort()
+                                                  .map(([letter, url]) => (
+                                                    <div
+                                                      key={letter}
+                                                      className="rounded-lg border border-violet-200 overflow-hidden p-3"
+                                                    >
+                                                      <div className="flex items-center justify-between mb-2">
+                                                        <div className="text-sm font-semibold text-slate-800">
+                                                          Final {letter}
+                                                          {run.topicName
+                                                            ? ` (${run.topicName})`
+                                                            : ''}
+                                                        </div>
+                                                        <button
+                                                          onClick={async () => {
+                                                            const res =
+                                                              await fetch(url);
+                                                            const blob =
+                                                              await res.blob();
+                                                            const blobUrl =
+                                                              window.URL.createObjectURL(
+                                                                blob
+                                                              );
+                                                            const a =
+                                                              document.createElement(
+                                                                'a'
+                                                              );
+                                                            a.href = blobUrl;
+                                                            a.download = `${run.topicName || 'video'}-Final${letter}.mp4`;
+                                                            document.body.appendChild(
+                                                              a
+                                                            );
+                                                            a.click();
+                                                            window.URL.revokeObjectURL(
+                                                              blobUrl
+                                                            );
+                                                            document.body.removeChild(
+                                                              a
+                                                            );
+                                                          }}
+                                                          className="inline-flex items-center gap-1 text-xs text-violet-600 hover:text-violet-800"
+                                                        >
+                                                          <Download className="w-3 h-3" />{' '}
+                                                          Download
+                                                        </button>
+                                                      </div>
+                                                      <video
+                                                        src={url}
+                                                        controls
+                                                        className="w-full rounded aspect-video object-contain bg-black"
+                                                      />
+                                                    </div>
+                                                  ))}
+                                              </div>
+                                            );
+                                          }
+
+                                          let finalVideoUrl = '';
+                                          if (runIsNoExtend) {
                                             finalVideoUrl =
                                               run.stitchedVideoUrl || '';
                                           } else {
@@ -3676,7 +4755,9 @@ export default function SandboxPage() {
                                             >
                                               <div className="flex justify-between items-center mb-1.5">
                                                 <div className="text-xs font-medium text-slate-600">
-                                                  Step {step.stepNumber}
+                                                  Clip{' '}
+                                                  {step.label ??
+                                                    step.stepNumber}
                                                 </div>
                                                 {step.videoVersions &&
                                                   step.videoVersions.length >
@@ -3758,6 +4839,78 @@ export default function SandboxPage() {
                       </div>
                     );
                   })()}
+
+                  {/* Final Edited Video */}
+                  {sandboxId && (
+                    <div className="mt-6 bg-white rounded-xl border border-slate-200 shadow-sm p-4">
+                      <div className="flex items-center justify-between mb-3">
+                        <h3 className="text-sm font-semibold text-slate-700">
+                          Final Edited Video
+                        </h3>
+                        <div className="flex items-center gap-2">
+                          {isPosted && (
+                            <span className="text-xs text-violet-600 bg-violet-50 px-2 py-0.5 rounded-full font-medium">
+                              Posted
+                            </span>
+                          )}
+                          {finalEditedVideo && (
+                            <span className="text-xs text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full font-medium">
+                              Uploaded
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      {finalEditedVideo && !isPosted && (
+                        <button
+                          onClick={handleMarkPosted}
+                          disabled={isMarkingPosted}
+                          className="w-full mb-3 flex items-center justify-center gap-2 py-2 px-4 rounded-lg bg-violet-600 hover:bg-violet-700 disabled:opacity-50 text-white text-sm font-medium transition-colors"
+                        >
+                          {isMarkingPosted ? (
+                            <>
+                              <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                              Marking…
+                            </>
+                          ) : (
+                            'Mark as Posted'
+                          )}
+                        </button>
+                      )}
+                      {finalEditedVideo && (
+                        <video
+                          src={finalEditedVideo}
+                          controls
+                          className="w-full rounded-lg aspect-video object-contain bg-black mb-3"
+                        />
+                      )}
+                      <label className="flex items-center justify-center gap-2 w-full cursor-pointer border-2 border-dashed border-slate-200 rounded-lg py-3 px-4 text-sm text-slate-500 hover:border-violet-400 hover:text-violet-600 transition-colors">
+                        {isUploadingFinalVideo ? (
+                          <>
+                            <div className="w-4 h-4 border-2 border-violet-500 border-t-transparent rounded-full animate-spin" />
+                            Uploading…
+                          </>
+                        ) : (
+                          <>
+                            <Upload className="w-4 h-4" />
+                            {finalEditedVideo
+                              ? 'Replace final video'
+                              : 'Upload final edited video'}
+                          </>
+                        )}
+                        <input
+                          type="file"
+                          accept="video/*"
+                          className="hidden"
+                          disabled={isUploadingFinalVideo}
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (file) handleUploadFinalVideo(file);
+                            e.target.value = '';
+                          }}
+                        />
+                      </label>
+                    </div>
+                  )}
                 </div>
               </>
             )}

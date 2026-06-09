@@ -24,6 +24,7 @@ export async function POST(req: NextRequest) {
       sandboxId,
       runId,
       stepNumber,
+      isBroll,
     } = await req.json();
 
     const finalPrompt =
@@ -64,7 +65,14 @@ export async function POST(req: NextRequest) {
     const NEGATIVE_PROMPT =
       'slow speech, long pauses, continued talking after dialogue ends, extra lip movement, mumbling';
 
-    const enhancedPrompt = `${finalPrompt}\n\nInstructions:\n- ${PACING_INSTRUCTION}\n- ${HARD_STOP_INSTRUCTION}`;
+    const brollPrefix =
+      'No human faces. No people. No human subjects. B-roll footage only.';
+    const promptBase = isBroll
+      ? `${brollPrefix}\n\n${finalPrompt}`
+      : finalPrompt;
+    const enhancedPrompt = `${promptBase}\n\nInstructions:\n- ${PACING_INSTRUCTION}\n- ${HARD_STOP_INSTRUCTION}`;
+
+    console.log(`  - Shot Type: ${isBroll ? 'B-roll' : 'A-roll'}`);
 
     const res = await generateVertexImageRefs({
       prompt: enhancedPrompt,
@@ -77,6 +85,7 @@ export async function POST(req: NextRequest) {
       location: vertexLocation || 'us-central1',
       referenceImages: resolvedReferenceImages,
       negativePrompt: NEGATIVE_PROMPT,
+      isBroll: !!isBroll,
     });
 
     if (res?.outputName) {
