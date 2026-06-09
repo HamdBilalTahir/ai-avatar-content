@@ -5,6 +5,16 @@ import { FieldValue } from 'firebase-admin/firestore';
 export const dynamic = 'force-dynamic';
 
 export async function POST(req: NextRequest) {
+  if (!db || !(db as any).collection) {
+    console.error(
+      '[exports/mark-posted] Firebase Admin not initialized — check FIREBASE_* env vars on Vercel'
+    );
+    return NextResponse.json(
+      { error: 'Server misconfiguration: Firestore not available' },
+      { status: 500 }
+    );
+  }
+
   const authHeader = req.headers.get('authorization') ?? '';
   const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
 

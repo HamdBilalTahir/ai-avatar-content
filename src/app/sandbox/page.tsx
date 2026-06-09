@@ -1115,17 +1115,20 @@ export default function SandboxPage() {
   const handleMarkPosted = async () => {
     if (!sandboxId) return;
     setIsMarkingPosted(true);
+    const markingAs = !isPosted;
     try {
       await setDoc(
         doc(collection(db, 'sandbox'), sandboxId),
-        { posted: true, postedAt: serverTimestamp() },
+        markingAs
+          ? { posted: true, postedAt: serverTimestamp() }
+          : { posted: false, postedAt: null },
         { merge: true }
       );
-      setIsPosted(true);
+      setIsPosted(markingAs);
     } catch (err) {
-      console.error('Failed to mark as posted', err);
+      console.error('Failed to update posted status', err);
       alert(
-        'Failed to mark as posted: ' +
+        'Failed to update posted status: ' +
           (err instanceof Error ? err.message : 'unknown error')
       );
     } finally {
@@ -4860,17 +4863,19 @@ export default function SandboxPage() {
                           )}
                         </div>
                       </div>
-                      {finalEditedVideo && !isPosted && (
+                      {finalEditedVideo && (
                         <button
                           onClick={handleMarkPosted}
                           disabled={isMarkingPosted}
-                          className="w-full mb-3 flex items-center justify-center gap-2 py-2 px-4 rounded-lg bg-violet-600 hover:bg-violet-700 disabled:opacity-50 text-white text-sm font-medium transition-colors"
+                          className={`w-full mb-3 flex items-center justify-center gap-2 py-2 px-4 rounded-lg disabled:opacity-50 text-white text-sm font-medium transition-colors ${isPosted ? 'bg-slate-500 hover:bg-slate-600' : 'bg-violet-600 hover:bg-violet-700'}`}
                         >
                           {isMarkingPosted ? (
                             <>
                               <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                              Marking…
+                              Updating…
                             </>
+                          ) : isPosted ? (
+                            'Mark as Unposted'
                           ) : (
                             'Mark as Posted'
                           )}

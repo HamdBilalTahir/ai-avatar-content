@@ -6,6 +6,15 @@
 
 ---
 
+> ### Sandbox: Mark as Posted Toggle — Unpost Support
+>
+> - **What changed:** The "Mark as Posted" button now toggles. When already posted it shows "Mark as Unposted" (grey) and sets `posted: false` and `postedAt: null` in Firestore. When unposted it shows "Mark as Posted" (violet) and sets `posted: true` and `postedAt: serverTimestamp()`. Button is visible whenever `finalEditedVideo` is uploaded, regardless of current posted state.
+> - **Why:** Users need to correct a mistaken post or re-queue a video without losing the uploaded final.
+> - **Files:**
+>   - `src/app/sandbox/page.tsx`
+
+---
+
 > ### API: Mark Sandbox as Posted Endpoint
 >
 > - **What changed:** Added `POST /api/exports/mark-posted` — bearer-token-protected endpoint (same `apiConfig/exportKeys.finalVideosKey` key as the GET finals endpoint) that accepts `{ sandboxId }` in the JSON body and sets `posted: true` and `postedAt: serverTimestamp()` on the sandbox document. Returns `{ success, sandboxId, posted }`. Returns 404 if the sandbox doesn't exist.
